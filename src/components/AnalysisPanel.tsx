@@ -25,7 +25,14 @@ const DIMENSION_LABEL: Record<string, string> = {
  * 手动触发而非自动轮询：每次研判都是一次真金白银的 API 调用，
  * 而且行情几分钟内的变化通常不足以改变研判结论，自动刷新纯属烧钱。
  */
-export function AnalysisPanel({ symbol }: { symbol: string }) {
+export function AnalysisPanel({
+  symbol,
+  onAnalyzed,
+}: {
+  symbol: string;
+  /** 研判成功后通知父组件——准确率面板需要重新拉取以显示这条新记录 */
+  onAnalyzed?: () => void;
+}) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -44,6 +51,7 @@ export function AnalysisPanel({ symbol }: { symbol: string }) {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setAnalysis(data.analysis);
       setGeneratedAt(data.generatedAt);
+      onAnalyzed?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

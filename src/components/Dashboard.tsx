@@ -15,6 +15,17 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { NewsPanel } from './NewsPanel';
 import { MarketContext } from './MarketContext';
 import { SourceHealthBar } from './SourceHealthBar';
+import { AlertsPanel } from './AlertsPanel';
+import { AccuracyPanel } from './AccuracyPanel';
+import { useAlertEngine } from '@/lib/hooks/useAlertEngine';
+
+type PanelTab = 'indicators' | 'analysis' | 'alerts';
+
+const TABS: { id: PanelTab; label: string }[] = [
+  { id: 'indicators', label: '技术面' },
+  { id: 'analysis', label: 'AI 研判' },
+  { id: 'alerts', label: '告警' },
+];
 
 interface KlineResponse {
   candles: Candle[];
@@ -25,6 +36,9 @@ export function Dashboard() {
   const { symbols, active } = useWatchlist();
   const [interval, setIntervalState] = useState<Interval>('1h');
   const [showOverlays, setShowOverlays] = useState(true);
+  const [tab, setTab] = useState<PanelTab>('indicators');
+  /** 研判完成后自增，用于让准确率面板重新拉取（新记录刚落盘） */
+  const [analysisVersion, setAnalysisVersion] = useState(0);
 
   /**
    * K 线请求结果连同它对应的 (币种, 周期) 一起存。
@@ -91,6 +105,9 @@ export function Dashboard() {
       { label: 'BOLL 下轨', color: '#3f3f46', data: bb.lower },
     ];
   }, [data, showOverlays]);
+
+  // 告警统一在这里求值，保证一次数据更新只触发一次
+  useAlertEngine(active, live?.last ?? data?.technical?.price, data?.technical ?? null);
 
   const price = live?.last ?? data?.technical?.price;
   const changePercent = live ? ((live.last - live.open24h) / live.open24h) * 100 : undefined;
@@ -181,14 +198,47 @@ export function Dashboard() {
           </div>
         </main>
 
-        {/* 右栏：分析 */}
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-zinc-800">
-          <IndicatorPanel tech={data?.technical ?? null} />
-          <div className="border-t border-zinc-800">
-            <AnalysisPanel symbol={active} />
-          </div>
-          <div className="border-t border-zinc-800">
-            <NewsPanel baseAsset={baseAsset} />
+        {/* 右栏：分析。分页而非全部纵向堆叠——四块内容叠起来滚动条太长，找东西费劲 */}
+        <aside className="flex w-96 shrink-0 flex-col border-l border-zinc-800">
+          <nav className="flex shrink-0 border-b border-zinc-800">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex-1 px-2 py-2.5 text-xs transition-colors ${
+                  tab === t.id
+                    ? 'border-b-2 border-zinc-100 text-zinc-100'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {tab === 'indicators' && (
+              <>
+                <IndicatorPanel tech={data?.technical ?? null} />
+                <div className="border-t border-zinc-800">
+                  <NewsPanel baseAsset={baseAsset} />
+                </div>
+              </>
+            )}
+            {tab === 'analysis' && (
+              <>
+                <AnalysisPanel
+                  symbol={active}
+                  onAnalyzed={() => setAnalysisVersion((v) => v + 1)}
+                />
+                <div className="border-t border-zinc-800">
+                  <AccuracyPanel symbol={active} refreshKey={analysisVersion} />
+                </div>
+              </>
+            )}
+            {tab === 'alerts' && (
+              <AlertsPanel symbol={active} interval={interval} currentPrice={price} />
+            )}
           </div>
         </aside>
       </div>

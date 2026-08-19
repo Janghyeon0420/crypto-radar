@@ -5,6 +5,8 @@ import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import { MissingApiKeyError, isAnalysisAvailable, runAnalysis } from '@/lib/analysis/claude';
+import { appendRecord } from '@/lib/history/store';
+import { randomUUID } from 'node:crypto';
 import type { Interval } from '@/lib/datasources/types';
 
 /** 研判用的周期组合：日内 + 中期 + 长期，用于判断多周期共振 */
@@ -63,7 +65,24 @@ export async function POST(req: Request) {
       news:
         news.status === 'fulfilled' ? filterNewsByAsset(news.value, baseAsset).slice(0, 12) : [],
     });
-    return NextResponse.json({ analysis, generatedAt: Date.now() });
+    // 记录本次研判及当时的价格与波动率基准，供日后回头检验准确率。
+    // 落盘失败不该让用户白等一次研判，所以只告警不抛错。
+    const record = {
+      id: randomUUID(),
+      symbol,
+      createdAt: Date.now(),
+      priceAtAnalysis: tickers[0].last,
+      // 用最长周期的 ATR% 作为波动基准，它比短周期稳定
+      atrPercentAtAnalysis:
+        technicals[technicals.length - 1]?.volatility.atrPercent ?? NaN,
+      analysis,
+      evaluation: null,
+    };
+    await appendRecord(record).catch((e) => {
+      console.warn('[analysis] 研判历史落盘失败：', e);
+    });
+
+    return NextResponse.json({ analysis, generatedAt: record.createdAt, recordId: record.id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `研判失败：${message}` }, { status: 502 });
