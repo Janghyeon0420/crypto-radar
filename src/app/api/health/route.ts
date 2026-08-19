@@ -19,8 +19,50 @@ const PROBES = [
   { id: 'binance-main', label: '币安主站（预期受限）', url: 'https://api.binance.com/api/v3/ping' },
 ];
 
+/**
+ * 探测服务端的实际出口 IP 与归属地。
+ *
+ * 这是本项目里排查问题最省时间的一个信号：Node 的 fetch 默认不读 HTTP_PROXY，
+ * 服务端很可能在用户毫不知情的情况下绕过 VPN 直连。把出口国家显示在界面上，
+ * "为什么 OKX 连不上"这类问题一眼就能定位，不必去猜。
+ */
+async function detectEgress(): Promise<EgressInfo | null> {
+  for (const url of ['https://ipinfo.io/json', 'https://ifconfig.co/json']) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const d = (await res.json()) as Record<string, string>;
+      return {
+        ip: d.ip,
+        country: d.country ?? d.country_iso ?? null,
+        city: d.city ?? null,
+        // 是否经代理出去，决定了 OKX / Anthropic 这类需要翻墙的源能不能用
+        viaProxy: process.env.NODE_USE_ENV_PROXY === '1' && Boolean(proxyUrl()),
+      };
+    } catch {
+      // 换下一个源
+    }
+  }
+  return null;
+}
+
+interface EgressInfo {
+  ip: string;
+  country: string | null;
+  city: string | null;
+  viaProxy: boolean;
+}
+
+const proxyUrl = () =>
+  process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.HTTP_PROXY ?? process.env.http_proxy ?? null;
+
 export async function GET() {
-  const results = await Promise.all(
+  const [egress, results] = await Promise.all([
+    detectEgress(),
+    Promise.all(
     PROBES.map(async ({ id, label, url }): Promise<SourceHealth> => {
       const started = Date.now();
       try {
@@ -47,7 +89,14 @@ export async function GET() {
         };
       }
     }),
-  );
+  ),
+  ]);
 
-  return NextResponse.json({ sources: results, llmConfigured: isAnalysisAvailable() });
+  return NextResponse.json({
+    sources: results,
+    llmConfigured: isAnalysisAvailable(),
+    egress,
+    proxyConfigured: Boolean(proxyUrl()),
+    proxyEnabled: process.env.NODE_USE_ENV_PROXY === '1',
+  });
 }

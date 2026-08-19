@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_USE_ENV_PROXY=1 next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "NODE_USE_ENV_PROXY=1 next start",
+    "lint": "eslint",
+    "netcheck": "node scripts/check-network.mjs",
+    "netcheck:proxy": "NODE_USE_ENV_PROXY=1 node scripts/check-network.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

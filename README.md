@@ -27,7 +27,20 @@ npm install
 npm run dev
 ```
 
-打开 http://localhost:3000 即可使用。**行情、图表、指标、资讯全部无需任何配置。**
+打开 http://localhost:3000 即可使用。**行情、图表、指标、资讯全部无需任何配置**——
+核心行情源 `binance.vision` 从中国大陆直连即可访问，实测比走 VPN 更快。
+
+### 如果你在中国大陆或使用 VPN（重要）
+
+Node.js 的 `fetch` **默认不读取代理环境变量**，服务端会绕过你的 VPN 直连，
+导致 OKX 衍生品和 AI 研判失败。启动时带上代理地址即可（`NODE_USE_ENV_PROXY=1` 已内置）：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 npm run dev
+```
+
+端口换成你的 VPN 客户端实际监听的本地代理端口。看板顶部会显示服务端出口国家，
+一眼可确认是否生效。详见 [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md)。
 
 启用 AI 研判（可选）：
 
@@ -37,15 +50,21 @@ cp .env.example .env.local
 
 然后在 `.env.local` 中填入你的 `ANTHROPIC_API_KEY`。
 
-## 验证数据源
+## 网络体检
+
+切换 VPN 节点后跑一次，用实测数据决定分流规则：
 
 ```bash
-curl -s http://localhost:3000/api/health | python3 -m json.tool
+npm run netcheck:proxy
 ```
 
-预期：`binance-vision`、`okx`、`fng`、`cointelegraph` 为 `ok: true`；
-`binance-main`（币安主站）为 `ok: false` —— **这是正确结果**，
+输出包含出口 IP 与归属地、每个数据源的通断，并直接判定该节点是
+「非美国节点，可用于币安交易」还是「受限（美国）节点」。
+
+其中 `binance-main`（币安主站）显示为失败是**正确结果**——
 它是故意保留的对照探针，证明封锁真实存在且镜像方案确实绕过了它。
+注意区分两种失败：**451** 表示请求确实从 VPN 出去并被币安地理封锁；
+**超时** 则表示请求根本没走代理（被 GFW 静默丢弃）。
 
 ## 技术栈
 
@@ -65,6 +84,8 @@ lightweight-charts (TradingView) · Zustand · Zod · Anthropic SDK
 - 币安合约数据（fapi）在美国 IP 下不可达，资金费率与持仓量取自 OKX，
   两家交易所的绝对数值不可直接比较，看趋势和方向即可。
 - 恐惧贪婪指数是**全市场**情绪，非单一币种。
+- OKX 与 Anthropic API 在中国大陆直连不可达，必须配置 `HTTPS_PROXY`（见上）。
+  同时运行两个 VPN 客户端不可行，正确做法是单客户端 + 规则分流，方案见 DATA-SOURCES.md。
 
 ## 免责声明
 
