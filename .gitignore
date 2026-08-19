@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# 但配置模板必须入库——README 引用它，否则克隆下来无从配置
+!.env.example
 
 # vercel
 .vercel

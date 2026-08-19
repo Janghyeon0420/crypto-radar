@@ -35,23 +35,32 @@ export function AnalysisPanel({
 }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
+  /** 本次结果是否来自缓存，以及复用的理由 */
+  const [cache, setCache] = useState<{ cached: boolean; reason?: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async () => {
+  /**
+   * @param force 跳过缓存强制重新生成。
+   *   默认走缓存是为了控制成本——每次研判都是一次真实付费调用，
+   *   而几分钟内的行情变化通常不足以改变结论。
+   */
+  const run = async (force = false) => {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch('/api/analysis', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ symbol }),
+        body: JSON.stringify({ symbol, force }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setAnalysis(data.analysis);
       setGeneratedAt(data.generatedAt);
-      onAnalyzed?.();
+      setCache({ cached: Boolean(data.cached), reason: data.cacheReason });
+      // 命中缓存时没有新记录产生，不必刷新准确率面板
+      if (!data.cached) onAnalyzed?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -64,7 +73,7 @@ export function AnalysisPanel({
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-zinc-200">AI 综合研判</h3>
         <button
-          onClick={run}
+          onClick={() => run(false)}
           disabled={loading}
           className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-900 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
         >
@@ -89,6 +98,23 @@ export function AnalysisPanel({
 
       {analysis && (
         <div className="space-y-4">
+          {/* 命中缓存时明确告知，并提供强制重算入口——
+              让用户清楚这次没有产生费用，也知道怎么拿到最新结论 */}
+          {cache?.cached && (
+            <div className="flex items-start justify-between gap-2 rounded-lg bg-sky-500/10 px-3 py-2 ring-1 ring-sky-500/20">
+              <p className="text-[11px] leading-relaxed text-sky-300/90">
+                {cache.reason ?? '复用了此前的研判结果'}，本次未产生调用费用
+              </p>
+              <button
+                onClick={() => run(true)}
+                disabled={loading}
+                className="shrink-0 text-[11px] text-sky-400 underline-offset-2 hover:underline disabled:text-zinc-600"
+              >
+                强制重算
+              </button>
+            </div>
+          )}
+
           <div>
             <p className={`text-base font-medium ${DIRECTION[analysis.direction].cls}`}>
               {analysis.headline}
@@ -179,7 +205,7 @@ export function AnalysisPanel({
           )}
 
           <p className="border-t border-zinc-800 pt-3 text-[11px] leading-relaxed text-zinc-600">
-            {generatedAt && `生成于 ${timeAgo(generatedAt)}。`}
+            {generatedAt && `${cache?.cached ? '原研判生成于' : '生成于'} ${timeAgo(generatedAt)}。`}
             以上为模型基于公开数据的分析，不构成投资建议。加密市场波动剧烈，请自行判断并承担风险。
           </p>
         </div>
