@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Crypto Radar
 
-## Getting Started
+加密货币行情监控、技术面分析与 AI 走势研判看板。
 
-First, run the development server:
+**为在美国 VPN 环境下使用币安行情而设计** —— 币安主站对美国 IP 返回 HTTP 451，
+本项目通过币安官方公开数据镜像 `*.binance.vision` 绕开该限制，
+不需要代理服务器、不需要非美国 VPS、不需要 API Key。
+完整实测见 [docs/DATA-SOURCES.md](docs/DATA-SOURCES.md)。
+
+## 功能
+
+- **实时行情** — WebSocket 推送自选币种价格，K 线随周期自动刷新
+- **技术面分析** — MA / EMA / RSI / MACD / 布林带 / KDJ / ATR / VWAP / 自动识别支撑阻力，
+  附带一套透明的加权打分和逐条依据
+- **多周期视图** — 1m / 5m / 15m / 1h / 4h / 1d / 1w
+- **基本面与情绪** — 永续合约资金费率、未平仓量、恐惧贪婪指数
+- **资讯聚合** — Cointelegraph / Decrypt / CoinDesk / 币安公告，按币种过滤
+- **AI 综合研判** — 由 Claude 结合以上全部维度，输出结构化的方向判断、
+  置信度、因子拆解、情景推演（含概率）、关键价位与风险点
+- **自选管理** — 484 个 USDT 交易对可搜索添加，保存在本地浏览器
+- **数据源健康监控** — 顶部状态条实时显示每个数据源通断
+
+## 快速开始
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+打开 http://localhost:3000 即可使用。**行情、图表、指标、资讯全部无需任何配置。**
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+启用 AI 研判（可选）：
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.example .env.local
+```
 
-## Learn More
+然后在 `.env.local` 中填入你的 `ANTHROPIC_API_KEY`。
 
-To learn more about Next.js, take a look at the following resources:
+## 验证数据源
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+curl -s http://localhost:3000/api/health | python3 -m json.tool
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+预期：`binance-vision`、`okx`、`fng`、`cointelegraph` 为 `ok: true`；
+`binance-main`（币安主站）为 `ok: false` —— **这是正确结果**，
+它是故意保留的对照探针，证明封锁真实存在且镜像方案确实绕过了它。
 
-## Deploy on Vercel
+## 技术栈
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 ·
+lightweight-charts (TradingView) · Zustand · Zod · Anthropic SDK
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 文档
+
+- [数据源与网络可达性评估](docs/DATA-SOURCES.md) —— 含完整实测数据，**建议先读**
+- [架构说明](docs/ARCHITECTURE.md) —— 分层、目录、关键设计决策
+- [后续规划](docs/ROADMAP.md)
+
+## 已知边界
+
+- 本项目**只读公开行情，不接账户、不下单**。`*.binance.vision` 镜像不提供任何签名端点。
+  若将来需要账户功能，必须自建非美国出口的代理，路径见 DATA-SOURCES.md 末节。
+- 币安合约数据（fapi）在美国 IP 下不可达，资金费率与持仓量取自 OKX，
+  两家交易所的绝对数值不可直接比较，看趋势和方向即可。
+- 恐惧贪婪指数是**全市场**情绪，非单一币种。
+
+## 免责声明
+
+本项目输出的一切内容均为基于公开数据的分析，**不构成投资建议**。
+加密货币市场波动剧烈，任何预测都有很高的不确定性——
+这也是为什么研判输出中强制包含「风险」与「数据缺口」字段。
+请自行判断并承担全部风险。
