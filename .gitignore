@@ -42,3 +42,9 @@ next-env.d.ts
 
 # 研判历史（本地数据，不入库）
 /data
+
+# 凭据文件，绝不入库
+api key.txt
+*api*key*.txt
+*.key
+secrets/

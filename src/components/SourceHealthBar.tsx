@@ -17,9 +17,18 @@ interface EgressInfo {
   viaProxy: boolean;
 }
 
+interface ProviderInfo {
+  configured: boolean;
+  id: string | null;
+  label: string | null;
+  model: string | null;
+  viaRelay: boolean;
+  needsProxy: boolean;
+}
+
 interface HealthResponse {
   sources: SourceHealth[];
-  llmConfigured: boolean;
+  llm: ProviderInfo;
   egress: EgressInfo | null;
   proxyConfigured: boolean;
   proxyEnabled: boolean;
@@ -27,7 +36,7 @@ interface HealthResponse {
 
 export function SourceHealthBar() {
   const [sources, setSources] = useState<SourceHealth[]>([]);
-  const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null);
+  const [llm, setLlm] = useState<ProviderInfo | null>(null);
   const [egress, setEgress] = useState<EgressInfo | null>(null);
   const [proxyReady, setProxyReady] = useState<boolean | null>(null);
 
@@ -37,7 +46,7 @@ export function SourceHealthBar() {
         .then((r) => r.json())
         .then((d: HealthResponse) => {
           setSources(d.sources);
-          setLlmConfigured(d.llmConfigured);
+          setLlm(d.llm);
           setEgress(d.egress);
           setProxyReady(d.proxyConfigured && d.proxyEnabled);
         })
@@ -83,10 +92,26 @@ export function SourceHealthBar() {
           </span>
         );
       })}
-      {llmConfigured === false && (
+      {llm && !llm.configured && (
         <span className="flex items-center gap-1.5 text-amber-500/70">
           <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-          未配置 ANTHROPIC_API_KEY
+          未配置 LLM 供应商
+        </span>
+      )}
+      {llm?.configured && (
+        <span
+          className="flex items-center gap-1.5"
+          title={
+            llm.needsProxy
+              ? `${llm.label} · 该供应商在中国大陆需经代理访问`
+              : `${llm.label} · 国内直连可达`
+          }
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+          {llm.label}
+          {llm.needsProxy && !egress?.viaProxy && (
+            <span className="text-amber-500/80">需代理</span>
+          )}
         </span>
       )}
     </div>

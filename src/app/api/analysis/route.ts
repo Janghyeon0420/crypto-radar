@@ -4,7 +4,7 @@ import { fetchDerivatives } from '@/lib/datasources/okx';
 import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
-import { MissingApiKeyError, isAnalysisAvailable, runAnalysis } from '@/lib/analysis/claude';
+import { ProviderNotConfiguredError, isAnalysisAvailable, runAnalysis } from '@/lib/analysis/runner';
 import { appendRecord } from '@/lib/history/store';
 import { randomUUID } from 'node:crypto';
 import type { Interval } from '@/lib/datasources/types';
@@ -18,7 +18,12 @@ export const maxDuration = 120;
 export async function POST(req: Request) {
   if (!isAnalysisAvailable()) {
     return NextResponse.json(
-      { error: new MissingApiKeyError().message, code: 'NO_API_KEY' },
+      {
+        error:
+          '未配置 LLM 供应商，AI 研判不可用（看板其余功能不受影响）。' +
+          '可选 DeepSeek（国内直连，无需代理）、Anthropic 或任意 OpenAI 格式中转站，详见 .env.example。',
+        code: 'NO_PROVIDER',
+      },
       { status: 503 },
     );
   }
@@ -84,6 +89,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ analysis, generatedAt: record.createdAt, recordId: record.id });
   } catch (err) {
+    if (err instanceof ProviderNotConfiguredError) {
+      return NextResponse.json({ error: err.message, code: 'NO_PROVIDER' }, { status: 503 });
+    }
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `研判失败：${message}` }, { status: 502 });
   }

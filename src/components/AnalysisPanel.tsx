@@ -81,7 +81,9 @@ export function AnalysisPanel({
       {!analysis && !error && !loading && (
         <p className="text-xs leading-relaxed text-zinc-500">
           结合多周期技术面、衍生品资金费率、市场情绪与近期资讯，
-          由 Claude 输出结构化走势研判与情景推演。需配置 ANTHROPIC_API_KEY。
+          输出结构化走势研判与情景推演。需在 .env.local 配置 LLM 供应商——
+          DeepSeek 国内直连可达、无需代理，是成本最低的选择；
+          也支持 Anthropic 官方或任意 OpenAI 格式中转站。
         </p>
       )}
 

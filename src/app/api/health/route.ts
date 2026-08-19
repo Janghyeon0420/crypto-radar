@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { BINANCE_REST } from '@/lib/datasources/binance-vision';
-import { isAnalysisAvailable } from '@/lib/analysis/claude';
+import { describeProvider } from '@/lib/analysis/runner';
 import type { SourceHealth } from '@/lib/datasources/types';
 
 /**
@@ -94,7 +94,7 @@ export async function GET() {
 
   return NextResponse.json({
     sources: results,
-    llmConfigured: isAnalysisAvailable(),
+    llm: describeProvider(),
     egress,
     proxyConfigured: Boolean(proxyUrl()),
     proxyEnabled: process.env.NODE_USE_ENV_PROXY === '1',

@@ -15,8 +15,9 @@
 - **多周期视图** — 1m / 5m / 15m / 1h / 4h / 1d / 1w
 - **基本面与情绪** — 永续合约资金费率、未平仓量、恐惧贪婪指数
 - **资讯聚合** — Cointelegraph / Decrypt / CoinDesk / 币安公告，按币种过滤
-- **AI 综合研判** — 由 Claude 结合以上全部维度，输出结构化的方向判断、
-  置信度、因子拆解、情景推演（含概率）、关键价位与风险点
+- **AI 综合研判** — 结合以上全部维度，输出结构化的方向判断、置信度、
+  因子拆解、情景推演（含概率）、关键价位与风险点。
+  支持 DeepSeek / 中转站 / Anthropic 官方，可自由切换
 - **告警** — 价格突破/跌破、RSI 极值、MACD 交叉、布林带挤压结束、放量，
   触发时发桌面通知，带 15 分钟冷却避免阈值附近抖动刷屏
 - **研判准确率回测** — 每次研判自动存档，到期后拉取真实行情自动检验。
@@ -52,7 +53,20 @@ HTTPS_PROXY=http://127.0.0.1:7890 npm run dev
 cp .env.example .env.local
 ```
 
-然后在 `.env.local` 中填入你的 `ANTHROPIC_API_KEY`。
+支持三类供应商，三选一即可，`.env.example` 里每一种都有完整注释：
+
+| 方案 | 国内直连 | 配置 |
+|---|---|---|
+| **DeepSeek**（推荐国内使用） | ✅ 无需代理 | `DEEPSEEK_API_KEY` |
+| **中转站**（OpenAI 或 Anthropic 格式） | 通常 ✅ | `OPENAI_BASE_URL` 或 `ANTHROPIC_BASE_URL` |
+| **Anthropic 官方** | ❌ 需代理 | `ANTHROPIC_API_KEY` |
+
+未显式设置 `LLM_PROVIDER` 时会按 DeepSeek → Anthropic → OpenAI 的顺序自动选用已配置的那个。
+看板顶部状态条会显示当前生效的供应商与模型。
+
+由于只有 Anthropic 原生支持 structured outputs，其余供应商走 `json_object` 模式时
+本项目会自动注入 JSON Schema 说明、剥离代码块围栏、用 Zod 校验，
+并在校验失败时带着具体字段错误重试一次——这些你不需要关心，配好 key 即可。
 
 ## 网络体检
 
@@ -88,7 +102,8 @@ lightweight-charts (TradingView) · Zustand · Zod · Anthropic SDK
 - 币安合约数据（fapi）在美国 IP 下不可达，资金费率与持仓量取自 OKX，
   两家交易所的绝对数值不可直接比较，看趋势和方向即可。
 - 恐惧贪婪指数是**全市场**情绪，非单一币种。
-- OKX 与 Anthropic API 在中国大陆直连不可达，必须配置 `HTTPS_PROXY`（见上）。
+- OKX 在中国大陆直连不可达，需配置 `HTTPS_PROXY`（见上）。Anthropic 官方 API 同样如此，
+  但改用 DeepSeek 或中转站即可完全避开。
   同时运行两个 VPN 客户端不可行，正确做法是单客户端 + 规则分流，方案见 DATA-SOURCES.md。
 
 ## 免责声明
