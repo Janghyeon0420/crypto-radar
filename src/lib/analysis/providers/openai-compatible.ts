@@ -98,7 +98,7 @@ export function createDeepSeekProvider(): LlmProvider {
   const model = process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-pro';
   return createOpenAiCompatibleProvider({
     apiKey: process.env.DEEPSEEK_API_KEY!,
-    baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com',
+    baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com/v1',
     model,
     label: `DeepSeek（${model}）`,
     viaRelay: false,

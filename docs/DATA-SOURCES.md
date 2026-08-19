@@ -134,9 +134,33 @@ npm run netcheck:proxy    # 经代理出口体检（需已设 HTTPS_PROXY）
 | 恐惧贪婪指数 | ✅ | 不需要 |
 | Cointelegraph 资讯 | ✅ | 不需要 |
 | OKX 衍生品 | ❌ 超时 | ✅ 需要 |
-| **DeepSeek API（AI 研判）** | ✅ **可用** | **不需要** |
-| Anthropic API（AI 研判） | ❌ 403 | ✅ 需要 |
+| **DeepSeek API** | ✅ 可用 | 不需要 |
+| **OpenAI 格式中转站** | ✅ 可用 | ❌ **反而会超时，必须直连** |
+| Anthropic API（官方） | ❌ 403 | ✅ 需要 |
 | 币安主站（交易用） | ❌ | ✅ 且必须**非美国**节点 |
+
+## ⚠️ 中转站必须直连：NO_PROXY 的必要性
+
+实测中转站与 OKX 的网络需求**恰好相反**：
+
+| 目标 | 直连 | 经美国节点代理 |
+|---|---|---|
+| OKX 衍生品 | ❌ 超时（GFW） | ✅ 200 |
+| 中转站（LLM 研判） | ✅ 200 | ❌ CONNECT_TIMEOUT |
+
+也就是说，一个全局的 `HTTPS_PROXY` 会让其中一方必然失败。
+解法是用 `NO_PROXY` 做域名级排除——Node 的 `NODE_USE_ENV_PROXY` 支持该变量：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 \
+NO_PROXY=localhost,127.0.0.1,你的中转站域名 \
+npm run dev
+```
+
+这样 OKX 走代理、中转站走直连，两者同时可用。
+
+若你用的是 **DeepSeek**，它和中转站一样直连可达，同样应加进 `NO_PROXY`
+（虽然多数情况下走代理也能通，但直连更快且更稳）。
 
 ## 双 VPN（美国 + 非美国）节点方案
 
@@ -161,6 +185,9 @@ rules:
   # 这两个大陆直连不通，任意海外节点即可
   - DOMAIN-SUFFIX,okx.com,非美国节点
   - DOMAIN-SUFFIX,anthropic.com,美国节点
+  # LLM 中转站与 DeepSeek 直连最快，走代理反而超时
+  - DOMAIN-SUFFIX,deepseek.com,DIRECT
+  # - DOMAIN-SUFFIX,你的中转站域名,DIRECT
   # 需要美国出口的服务放这里
   # - DOMAIN-SUFFIX,example-us-only.com,美国节点
   - GEOIP,CN,DIRECT

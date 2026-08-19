@@ -55,11 +55,18 @@ cp .env.example .env.local
 
 支持三类供应商，三选一即可，`.env.example` 里每一种都有完整注释：
 
-| 方案 | 国内直连 | 配置 |
-|---|---|---|
-| **DeepSeek**（推荐国内使用） | ✅ 无需代理 | `DEEPSEEK_API_KEY` |
-| **中转站**（OpenAI 或 Anthropic 格式） | 通常 ✅ | `OPENAI_BASE_URL` 或 `ANTHROPIC_BASE_URL` |
-| **Anthropic 官方** | ❌ 需代理 | `ANTHROPIC_API_KEY` |
+| 方案 | 国内直连 | 实测单次研判耗时 | 配置 |
+|---|---|---|---|
+| **OpenAI 格式中转站** | ✅ 需直连 | **约 23s**（claude-opus-5） | `OPENAI_BASE_URL` |
+| **DeepSeek** | ✅ 无需代理 | 约 50s（v4-flash）/ 95s（v4-pro） | `DEEPSEEK_API_KEY` |
+| **Anthropic 官方** | ❌ 需代理 | — | `ANTHROPIC_API_KEY` |
+
+⚠️ 中转站与 DeepSeek 都需要**直连**，而 OKX 衍生品数据需要**走代理**。
+若两者同时使用，必须用 `NO_PROXY` 排除：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=localhost,127.0.0.1,你的中转站域名 npm run dev
+```
 
 未显式设置 `LLM_PROVIDER` 时会按 DeepSeek → Anthropic → OpenAI 的顺序自动选用已配置的那个。
 看板顶部状态条会显示当前生效的供应商与模型。
