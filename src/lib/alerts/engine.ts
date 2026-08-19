@@ -2,7 +2,7 @@
  * 告警求值。
  *
  * 全部是纯函数：输入当前行情与技术面快照，输出触发的事件。
- * 这样既好测试，将来也能原样搬到服务端做常驻告警。
+ * 由 lib/alerts/worker.ts 在服务端定时调用，浏览器不再自行求值。
  */
 
 import type { TechnicalSnapshot } from '../indicators/summary';

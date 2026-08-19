@@ -17,7 +17,7 @@ import { MarketContext } from './MarketContext';
 import { SourceHealthBar } from './SourceHealthBar';
 import { AlertsPanel } from './AlertsPanel';
 import { AccuracyPanel } from './AccuracyPanel';
-import { useAlertEngine } from '@/lib/hooks/useAlertEngine';
+import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
 type PanelTab = 'indicators' | 'analysis' | 'alerts';
 
@@ -107,7 +107,8 @@ export function Dashboard() {
   }, [data, showOverlays]);
 
   // 告警统一在这里求值，保证一次数据更新只触发一次
-  useAlertEngine(active, live?.last ?? data?.technical?.price, data?.technical ?? null);
+  // 告警求值已全部移到服务端，这里只订阅结果并对新事件弹桌面通知
+  const { events: alertEvents, refresh: refreshAlertEvents } = useAlertEvents();
 
   const price = live?.last ?? data?.technical?.price;
   const changePercent = live ? ((live.last - live.open24h) / live.open24h) * 100 : undefined;
@@ -237,7 +238,13 @@ export function Dashboard() {
               </>
             )}
             {tab === 'alerts' && (
-              <AlertsPanel symbol={active} interval={interval} currentPrice={price} />
+              <AlertsPanel
+                symbol={active}
+                interval={interval}
+                currentPrice={price}
+                events={alertEvents}
+                onEventsChanged={refreshAlertEvents}
+              />
             )}
           </div>
         </aside>
