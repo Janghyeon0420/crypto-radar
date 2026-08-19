@@ -92,7 +92,10 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
 
 /** DeepSeek 预设 */
 export function createDeepSeekProvider(): LlmProvider {
-  const model = process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-chat';
+  // 实测 2026-08 可用模型为 deepseek-v4-pro / deepseek-v4-flash；
+  // 旧的 deepseek-chat / deepseek-reasoner 已不在 /models 列表中。
+  // pro 推理更充分，适合研判这种需要权衡多维证据的任务。
+  const model = process.env.DEEPSEEK_MODEL?.trim() || 'deepseek-v4-pro';
   return createOpenAiCompatibleProvider({
     apiKey: process.env.DEEPSEEK_API_KEY!,
     baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com',

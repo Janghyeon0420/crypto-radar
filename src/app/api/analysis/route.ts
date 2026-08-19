@@ -12,8 +12,12 @@ import type { Interval } from '@/lib/datasources/types';
 /** 研判用的周期组合：日内 + 中期 + 长期，用于判断多周期共振 */
 const ANALYSIS_INTERVALS: Interval[] = ['1h', '4h', '1d'];
 
-/** LLM 要拉多个源、还要推理，耗时明显长于普通接口 */
-export const maxDuration = 120;
+/**
+ * LLM 要拉多个源、还要推理，耗时明显长于普通接口。
+ * 实测 deepseek-v4-pro 做一次多周期研判约 95 秒（推理模型），
+ * 故留足余量，避免在模型思考较久时被平台超时切断。
+ */
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!isAnalysisAvailable()) {
