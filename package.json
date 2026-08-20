@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "NODE_USE_ENV_PROXY=1 next start",
     "lint": "eslint",
+    "test": "node scripts/test.mjs",
+    "test:live": "node scripts/test.mjs --live",
     "netcheck": "node scripts/check-network.mjs",
     "netcheck:proxy": "NODE_USE_ENV_PROXY=1 node scripts/check-network.mjs"
   },
@@ -28,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }

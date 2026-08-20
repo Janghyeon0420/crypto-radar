@@ -97,6 +97,21 @@ npm run netcheck:proxy
 注意区分两种失败：**451** 表示请求确实从 VPN 出去并被币安地理封锁；
 **超时** 则表示请求根本没走代理（被 GFW 静默丢弃）。
 
+## 测试
+
+```bash
+npm test
+```
+
+秒级返回，覆盖三处「错了不会立刻被发现」的逻辑：研判复用判定的边界、
+群机器人加签（写错是静默失败——HTTP 200 但消息不出现）、FOMC 日历解析。
+
+依赖真实网络的那部分默认跳过，需要时单独跑：
+
+```bash
+npm run test:live
+```
+
 ## 技术栈
 
 Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 ·
