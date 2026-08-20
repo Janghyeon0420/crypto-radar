@@ -44,7 +44,7 @@ interface WorkerStatus {
   lastRunAt: number | null;
   lastError: string | null;
   lastRuleCount: number;
-  notifier: 'telegram' | null;
+  notifiers: string[];
 }
 
 export function AlertsPanel({
@@ -62,6 +62,8 @@ export function AlertsPanel({
 }) {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [status, setStatus] = useState<WorkerStatus | null>(null);
+  /** 通知配置层面的问题（比如 webhook 域名无法识别），必须让用户看到 */
+  const [configIssues, setConfigIssues] = useState<string[]>([]);
   const [kind, setKind] = useState<AlertKind>('price_above');
   const [threshold, setThreshold] = useState('');
   const [once, setOnce] = useState(true);
@@ -105,7 +107,10 @@ export function AlertsPanel({
     const loadStatus = () =>
       fetch('/api/alerts/status', { signal: ac.signal })
         .then((r) => r.json())
-        .then((d) => setStatus(d.worker))
+        .then((d) => {
+          setStatus(d.worker);
+          setConfigIssues(d.configIssues ?? []);
+        })
         .catch(() => {});
 
     // 推迟到渲染提交之后，避免同步 setState 引发级联渲染
@@ -215,15 +220,19 @@ export function AlertsPanel({
             </span>
           </div>
           <p className="mt-1 text-zinc-500">
-            {status.notifier === 'telegram' ? (
+            {configIssues.length > 0 ? (
+              <span className="text-amber-500/90">
+                {configIssues.join('；')}
+              </span>
+            ) : status.notifiers.length > 0 ? (
               <>
-                通知出口 Telegram ·{' '}
+                推送至 {status.notifiers.join('、')} ·{' '}
                 <button onClick={testNotify} className="text-sky-400 hover:text-sky-300">
                   发送测试
                 </button>
               </>
             ) : (
-              <>未配置 Telegram，触发仅记录在此处（配置方法见 .env.example）</>
+              <>未配置通知通道，触发仅记录在此处（配置方法见 .env.example）</>
             )}
           </p>
           {status.lastRunAt && (

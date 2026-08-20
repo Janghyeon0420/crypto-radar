@@ -12,7 +12,7 @@ import { fetchCandles, fetchTickers } from '../datasources/binance-vision';
 import { buildTechnicalSnapshot, type TechnicalSnapshot } from '../indicators/summary';
 import { evaluateRules } from './engine';
 import { appendEvents, readRules, updateRules } from './store';
-import { formatEvents, sendTelegram, telegramConfigFromEnv } from './notify/telegram';
+import { dispatchEvents, resolveNotifiers } from './notify';
 import type { AlertEvent, AlertRule } from './types';
 import { INTERVALS, type Interval } from '../datasources/types';
 
@@ -27,7 +27,8 @@ export interface WorkerStatus {
   lastRuleCount: number;
   lastEventCount: number;
   totalRuns: number;
-  notifier: 'telegram' | null;
+  /** 已配置的通知通道名，空数组表示只记录不推送 */
+  notifiers: string[];
 }
 
 /**
@@ -59,7 +60,7 @@ if (!g[GLOBAL_KEY]) {
       lastRuleCount: 0,
       lastEventCount: 0,
       totalRuns: 0,
-      notifier: null,
+      notifiers: [],
     },
     timer: null,
     previousSnapshots: new Map(),
@@ -94,13 +95,13 @@ export function startWorker(): void {
   // 太频繁除了浪费配额没有意义——技术指标基于 K 线，1 分钟内不会有实质变化
   state.pollSeconds = Number.isFinite(seconds) && seconds >= 20 ? seconds : 60;
 
-  state.notifier = telegramConfigFromEnv() ? 'telegram' : null;
+  state.notifiers = resolveNotifiers().map((n) => n.label);
   state.running = true;
   state.reason = null;
 
   console.log(
     `[alerts] 告警轮询已启动，每 ${state.pollSeconds} 秒一轮` +
-      `，通知出口：${state.notifier ?? '仅记录（未配置 Telegram）'}`,
+      `，通知出口：${state.notifiers.join('、') || '仅记录（未配置通知通道）'}`,
   );
 
   // 立即跑一轮，不必等第一个周期
@@ -209,14 +210,13 @@ async function handleEvents(events: AlertEvent[]): Promise<void> {
 
   console.log(`[alerts] 触发 ${events.length} 条：${events.map((e) => e.message).join(' | ')}`);
 
-  const cfg = telegramConfigFromEnv();
-  if (!cfg) return;
-
-  const result = await sendTelegram(cfg, formatEvents(events));
-  if (!result.ok) {
+  const results = await dispatchEvents(events);
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length > 0) {
     // 通知失败不该让事件丢失——事件已先落盘，界面上仍然看得到
-    console.warn('[alerts] Telegram 推送失败：', result.detail);
-    state.lastError = `通知发送失败：${result.detail}`;
+    const detail = failed.map((f) => `${f.channel}：${f.detail}`).join('；');
+    console.warn('[alerts] 推送失败：', detail);
+    state.lastError = `通知发送失败 — ${detail}`;
   }
 }
 

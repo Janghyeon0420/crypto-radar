@@ -6,9 +6,7 @@
  * 不会因为网络方案的调整而失效。
  */
 
-import type { AlertEvent } from '../types';
-import { ALERT_LABELS } from '../types';
-import { formatPrice } from '../../format';
+import type { Notifier } from './types';
 
 const API = 'https://api.telegram.org';
 
@@ -22,6 +20,14 @@ export function telegramConfigFromEnv(): TelegramConfig | null {
   const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
   if (!botToken || !chatId) return null;
   return { botToken, chatId };
+}
+
+export function createTelegramNotifier(cfg: TelegramConfig): Notifier {
+  return {
+    id: 'telegram',
+    label: 'Telegram',
+    send: (text) => sendTelegram(cfg, text),
+  };
 }
 
 /** 校验 token 与 chatId 是否可用，供设置界面做连通性自检 */
@@ -59,7 +65,6 @@ export async function sendTelegram(
       body: JSON.stringify({
         chat_id: cfg.chatId,
         text,
-        parse_mode: 'HTML',
         // 告警是提醒，不需要链接预览占屏
         disable_web_page_preview: true,
       }),
@@ -72,33 +77,4 @@ export async function sendTelegram(
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * 把一批事件排版成一条消息。
- * 合并发送而不是逐条推送——同一轮轮询触发多条时，
- * 手机上连响五六下的体验很糟，也更容易被整体忽略。
- */
-export function formatEvents(events: AlertEvent[]): string {
-  if (events.length === 1) {
-    const e = events[0];
-    return (
-      `🔔 <b>${escapeHtml(e.symbol)}</b> ${escapeHtml(ALERT_LABELS[e.kind])}\n\n` +
-      `${escapeHtml(e.message)}\n\n` +
-      `<i>现价 ${formatPrice(e.price)} · ${new Date(e.triggeredAt).toLocaleString('zh-CN')}</i>`
-    );
-  }
-
-  const lines = events.map(
-    (e) => `• <b>${escapeHtml(e.symbol)}</b> ${escapeHtml(e.message)}`,
-  );
-  return (
-    `🔔 <b>${events.length} 条告警触发</b>\n\n` +
-    lines.join('\n') +
-    `\n\n<i>${new Date().toLocaleString('zh-CN')}</i>`
-  );
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
