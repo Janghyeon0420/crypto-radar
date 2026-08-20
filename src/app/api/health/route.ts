@@ -15,6 +15,11 @@ const PROBES = [
   { id: 'okx', label: 'OKX（衍生品）', url: 'https://www.okx.com/api/v5/public/time' },
   { id: 'fng', label: '恐惧贪婪指数', url: 'https://api.alternative.me/fng/?limit=1' },
   { id: 'cointelegraph', label: 'Cointelegraph 资讯', url: 'https://cointelegraph.com/rss' },
+  {
+    id: 'fed',
+    label: '美联储（宏观）',
+    url: 'https://www.federalreserve.gov/feeds/press_monetary.xml',
+  },
   // 故意保留一个受限探针：让看板直观显示"主站确实被封，镜像确实可用"
   { id: 'binance-main', label: '币安主站（预期受限）', url: 'https://api.binance.com/api/v3/ping' },
 ];

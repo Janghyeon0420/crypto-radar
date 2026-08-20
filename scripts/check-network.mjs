@@ -22,6 +22,9 @@ const TARGETS = [
   { id: 'okx', label: 'OKX 公开接口', url: 'https://www.okx.com/api/v5/public/time', critical: true },
   { id: 'fng', label: '恐惧贪婪指数', url: 'https://api.alternative.me/fng/?limit=1', critical: true },
   { id: 'cointelegraph', label: 'Cointelegraph RSS', url: 'https://cointelegraph.com/rss', critical: true },
+  { id: 'fed-rss', label: '美联储 RSS（宏观）', url: 'https://www.federalreserve.gov/feeds/press_monetary.xml', critical: true },
+  { id: 'fed-calendar', label: '美联储议息日历', url: 'https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm', critical: true },
+  { id: 'nyfed-effr', label: '纽约联储 EFFR 利率', url: 'https://markets.newyorkfed.org/api/rates/unsecured/effr/last/1.json', critical: true },
   { id: 'anthropic', label: 'Anthropic API（AI 研判）', url: 'https://api.anthropic.com/v1/models', critical: false, expectAuthError: true },
 
   // —— 决定"这个节点算不算非美国"的关键探针 ——

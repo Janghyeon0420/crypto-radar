@@ -80,9 +80,21 @@ export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promis
   throw lastErr;
 }
 
-/** 拉取文本（RSS 是 XML，不能走 fetchJson） */
+/**
+ * 拉取文本（RSS 是 XML，不能走 fetchJson）。
+ *
+ * 同样支持 ttlMs：有些文本源体积大而更新极慢——比如 FOMC 会议日历
+ * 一页 160KB、一年只变几次——每次请求都重新拉纯属浪费。
+ */
 export async function fetchText(url: string, opts: FetchOptions = {}): Promise<string> {
-  const { timeoutMs = 10_000, headers } = opts;
+  const { ttlMs = 0, timeoutMs = 10_000, headers } = opts;
+  const key = `text:${url}`;
+
+  if (ttlMs > 0) {
+    const hit = cache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.value as string;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -92,7 +104,9 @@ export async function fetchText(url: string, opts: FetchOptions = {}): Promise<s
       cache: 'no-store',
     });
     if (!res.ok) throw new UpstreamError(`HTTP ${res.status} from ${hostOf(url)}`, res.status, url);
-    return await res.text();
+    const text = await res.text();
+    if (ttlMs > 0) cache.set(key, { value: text, expiresAt: Date.now() + ttlMs });
+    return text;
   } finally {
     clearTimeout(timer);
   }

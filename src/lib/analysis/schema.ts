@@ -28,8 +28,8 @@ export const AnalysisSchema = z.object({
     .array(
       z.object({
         dimension: z
-          .enum(['technical', 'momentum', 'volume', 'derivatives', 'sentiment', 'news'])
-          .describe('该因子属于哪个分析维度'),
+          .enum(['technical', 'momentum', 'volume', 'derivatives', 'sentiment', 'news', 'macro'])
+          .describe('该因子属于哪个分析维度。macro = 美联储政策与流动性环境'),
         stance: z.enum(['bullish', 'bearish', 'neutral']).describe('该因子的方向'),
         weight: z.number().describe('该因子在本次判断中的权重，0-1'),
         note: z.string().describe('该因子的具体依据，引用给定数据中的实际数值'),

@@ -67,6 +67,54 @@ export interface NewsItem {
   source: string;
   publishedAt: number;
   summary?: string;
+  /**
+   * crypto = 行业资讯，macro = 宏观政策（目前是美联储）。
+   *
+   * 这两类必须分开呈现，不能混在一个按时间倒序的列表里：
+   * 加密资讯每小时几十条，美联储讲话几周才一条——
+   * 混排的结果是宏观信息永远被挤到列表末尾，等于没接。
+   */
+  category: 'crypto' | 'macro';
+}
+
+/**
+ * 美联储政策利率。
+ *
+ * 对加密资产而言这是最重要的单一宏观变量：它直接决定无风险收益率，
+ * 进而决定风险资产的估值基准与市场流动性。
+ */
+export interface PolicyRate {
+  /** 联邦基金有效利率（EFFR），市场实际成交出来的隔夜利率 */
+  effectiveRate: number;
+  /** FOMC 设定的目标区间下沿 / 上沿 */
+  targetLow: number;
+  targetHigh: number;
+  /** 该利率对应的业务日 */
+  effectiveDate: string;
+  source: string;
+}
+
+/** 一次 FOMC 议息会议 */
+export interface FomcMeeting {
+  /** 会期描述，如 "2026 年 9 月 15-16 日" */
+  label: string;
+  /**
+   * 决议公布时刻（毫秒 UTC）。
+   * 取会期最后一天的美东时间 14:00——声明就是这个点发布的，
+   * 而不是会议开始的那天。
+   */
+  decisionAt: number;
+  /** 该次会议是否同时发布经济预测摘要（点阵图），日历上以 * 标注 */
+  hasProjections: boolean;
+}
+
+/** 宏观环境快照 */
+export interface MacroSnapshot {
+  policyRate: PolicyRate | null;
+  /** 下一次议息会议，日历拉取失败或年内已开完时为 null */
+  nextMeeting: FomcMeeting | null;
+  /** 美联储官方资讯（货币政策新闻稿、官员讲话、国会证词） */
+  news: NewsItem[];
 }
 
 /** 数据源健康状态，用于前端显示"哪个源挂了" */

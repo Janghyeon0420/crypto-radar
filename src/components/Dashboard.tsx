@@ -16,14 +16,16 @@ import { NewsPanel } from './NewsPanel';
 import { MarketContext } from './MarketContext';
 import { SourceHealthBar } from './SourceHealthBar';
 import { AlertsPanel } from './AlertsPanel';
+import { MacroPanel } from './MacroPanel';
 import { AccuracyPanel } from './AccuracyPanel';
 import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
-type PanelTab = 'indicators' | 'analysis' | 'alerts';
+type PanelTab = 'indicators' | 'analysis' | 'macro' | 'alerts';
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: 'indicators', label: '技术面' },
   { id: 'analysis', label: 'AI 研判' },
+  { id: 'macro', label: '宏观' },
   { id: 'alerts', label: '告警' },
 ];
 
@@ -237,6 +239,7 @@ export function Dashboard() {
                 </div>
               </>
             )}
+            {tab === 'macro' && <MacroPanel />}
             {tab === 'alerts' && (
               <AlertsPanel
                 symbol={active}

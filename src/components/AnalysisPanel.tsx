@@ -17,6 +17,7 @@ const DIMENSION_LABEL: Record<string, string> = {
   derivatives: '衍生品',
   sentiment: '情绪',
   news: '资讯',
+  macro: '宏观',
 };
 
 /**

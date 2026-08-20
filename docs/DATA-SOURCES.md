@@ -65,6 +65,33 @@ WS  /stream?streams=...   # 实时推送  ✅
 | CoinGecko | 币种基本面、市值 | ⚠️ 间歇可用，免费额度限流严格 |
 | CryptoPanic | 资讯聚合 | ❌ HTTP 403（需注册 token） |
 
+### 美联储（宏观）
+
+补测于 2026-08-20，**出口为中国大陆直连**（宁波，未走代理）。
+这批源是本项目里少见的「大陆直连比走代理更顺」的一类：
+
+| 数据源 | 用途 | 结果 |
+|---|---|---|
+| **federalreserve.gov** `/feeds/press_monetary.xml` | 货币政策新闻稿（FOMC 声明、纪要） | ✅ HTTP 200，1.25s |
+| **federalreserve.gov** `/feeds/speeches.xml` | 官员讲话 | ✅ HTTP 200，1.50s |
+| **federalreserve.gov** `/feeds/testimony.xml` | 国会证词 | ✅ HTTP 200 |
+| **federalreserve.gov** `/monetarypolicy/fomccalendars.htm` | 议息日历（HTML，无结构化接口） | ✅ HTTP 200，1.85s |
+| **markets.newyorkfed.org** `/api/rates/unsecured/effr/last/1.json` | EFFR + 当前目标区间 | ✅ HTTP 200，1.34s |
+
+同一时刻同一条线路上 OKX 超时、币安主站超时——也就是说**宏观这条线和衍生品那条线
+需要的网络路径正好相反**，和中转站与 OKX 的关系一样（见下文 NO_PROXY 一节）。
+好在美联储的源全部免费无 Key，且都是低频数据，本项目对它们做了 10 分钟到 12 小时不等的缓存，
+真的走了代理导致变慢也不至于影响使用。
+
+两个选型说明：
+
+- **不用 `press_all.xml`**（全部新闻稿）。里面大部分是银行监管处罚、支付系统公告，
+  与市场无关，混进来只会稀释真正重要的利率决议与讲话。
+- **议息日历只能抓 HTML**。美联储没有提供日历的结构化接口，
+  FRED 有利率历史但需要注册 key、且不含未来会议日程。
+  抓 HTML 的代价是页面改版即失效，所以解析失败时界面显示「日历不可用」，
+  **不做硬编码兜底**——一个过期的日程比没有日程更危险。
+
 ## 最终选型
 
 ```
@@ -72,6 +99,7 @@ WS  /stream?streams=...   # 实时推送  ✅
 永续合约资金费率 + 持仓量    →  OKX 公开接口                            （币安 fapi 不可达）
 市场情绪                    →  alternative.me 恐惧贪婪指数
 资讯                        →  Cointelegraph / Decrypt / CoinDesk / 币安公告 RSS
+宏观（美联储）              →  federalreserve.gov RSS + 议息日历 / 纽约联储 EFFR 接口
 ```
 
 **结论：在美国 VPN 下，这套方案不需要任何代理服务器、不需要非美国 VPS、不需要 API Key。**

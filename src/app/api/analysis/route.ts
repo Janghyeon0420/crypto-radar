@@ -4,6 +4,7 @@ import { fetchCandles, fetchTickers } from '@/lib/datasources/binance-vision';
 import { fetchDerivatives } from '@/lib/datasources/okx';
 import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';
+import { fetchMacroSnapshot } from '@/lib/datasources/macro';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import { ProviderNotConfiguredError, isAnalysisAvailable, runAnalysis } from '@/lib/analysis/runner';
 import { appendRecord, readRecords } from '@/lib/history/store';
@@ -79,11 +80,12 @@ export async function POST(req: Request) {
     ANALYSIS_INTERVALS.map((i) => fetchCandles(symbol, i, 300)),
   );
 
-  // 衍生品/情绪/资讯是可选增强，任一失败都不该阻塞主流程
-  const [derivatives, sentiment, news] = await Promise.allSettled([
+  // 衍生品/情绪/资讯/宏观是可选增强，任一失败都不该阻塞主流程
+  const [derivatives, sentiment, news, macro] = await Promise.allSettled([
     fetchDerivatives(symbol),
     fetchFearGreed(),
     fetchNews(60),
+    fetchMacroSnapshot(),
   ]);
 
   const technicals = candleSets
@@ -104,6 +106,7 @@ export async function POST(req: Request) {
       sentiment: sentiment.status === 'fulfilled' ? sentiment.value : null,
       news:
         news.status === 'fulfilled' ? filterNewsByAsset(news.value, baseAsset).slice(0, 12) : [],
+      macro: macro.status === 'fulfilled' ? macro.value : null,
     });
 
     // 记录本次研判及当时的价格与波动率基准，供日后检验准确率，

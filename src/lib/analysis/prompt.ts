@@ -8,7 +8,13 @@
  */
 
 import type { TechnicalSnapshot } from '../indicators/summary';
-import type { DerivativesSnapshot, NewsItem, SentimentSnapshot, Ticker } from '../datasources/types';
+import type {
+  DerivativesSnapshot,
+  MacroSnapshot,
+  NewsItem,
+  SentimentSnapshot,
+  Ticker,
+} from '../datasources/types';
 
 export interface AnalysisInput {
   symbol: string;
@@ -19,6 +25,11 @@ export interface AnalysisInput {
   derivatives: DerivativesSnapshot | null;
   sentiment: SentimentSnapshot | null;
   news: NewsItem[];
+  /**
+   * 美联储政策环境。它解释的是"整个风险资产市场处在什么水温"，
+   * 单币种的技术面解释不了这个。
+   */
+  macro: MacroSnapshot | null;
 }
 
 export const SYSTEM_PROMPT = `你是一位加密货币市场分析师，服务于一个个人使用的行情看板。
@@ -34,12 +45,16 @@ export const SYSTEM_PROMPT = `你是一位加密货币市场分析师，服务�
    只有多周期、多维度高度共振时才给 75 以上；证据冲突时低于 40。
 6. scenarios 的概率必须反映真实的不确定性，不要给出 90% 这种过度自信的数字。
 7. factors 中的 note 必须引用具体数值（如"RSI 72.3 已入超买区"），不要只说"技术面偏强"。
+8. 宏观（美联储）数据是**背景**，不是择时信号。除非临近议息或刚出决议/讲话，
+   否则它对日内、数日尺度的权重应该很低。不要用"美联储维持利率不变"
+   去解释一根 15 分钟 K 线。真正值得提高其权重的情形只有两类：
+   议息在即（此时波动率通常被压制、决议后放大），或政策口径刚发生变化。
 
 你的输出是分析，不是投资建议。不要写"建议买入/卖出"这类操作指令，
 而是描述市场状态、可能的演化路径和各自的触发条件。`;
 
 export function buildUserPrompt(input: AnalysisInput): string {
-  const { symbol, baseAsset, ticker, technicals, derivatives, sentiment, news } = input;
+  const { symbol, baseAsset, ticker, technicals, derivatives, sentiment, news, macro } = input;
   const parts: string[] = [];
 
   parts.push(`# 分析标的：${symbol}（${baseAsset}）`);
@@ -86,6 +101,8 @@ export function buildUserPrompt(input: AnalysisInput): string {
     parts.push('\n## 市场情绪\n无数据');
   }
 
+  parts.push(renderMacro(macro));
+
   if (news.length) {
     parts.push('\n## 相关资讯（近期，按时间倒序）');
     // 只给标题和时间，正文摘要太占 token 且 RSS 摘要质量参差
@@ -101,6 +118,45 @@ export function buildUserPrompt(input: AnalysisInput): string {
 注意多周期之间是否共振或背离，这是判断趋势可靠性的关键。`);
 
   return parts.join('\n');
+}
+
+/**
+ * 宏观段落。
+ *
+ * 刻意把"距下次议息还有几天"算好再喂进去，而不是给个日期让模型自己减——
+ * 模型对"今天是哪天"没有可靠概念，让它算天数几乎必错，
+ * 而这个天数恰恰是宏观维度里最影响判断的一个数字。
+ */
+function renderMacro(macro: AnalysisInput['macro']): string {
+  if (!macro || (!macro.policyRate && !macro.nextMeeting && macro.news.length === 0)) {
+    return '\n## 宏观政策（美联储）\n无数据';
+  }
+
+  const lines = ['\n## 宏观政策（美联储）'];
+
+  if (macro.policyRate) {
+    lines.push(
+      `联邦基金目标区间：${macro.policyRate.targetLow.toFixed(2)}%-${macro.policyRate.targetHigh.toFixed(2)}%` +
+        `（实际成交 EFFR ${macro.policyRate.effectiveRate.toFixed(2)}%，截至 ${macro.policyRate.effectiveDate}）`,
+    );
+  }
+
+  if (macro.nextMeeting) {
+    const days = (macro.nextMeeting.decisionAt - Date.now()) / 86400_000;
+    lines.push(
+      `下次 FOMC 决议：${macro.nextMeeting.label}，距今 ${days.toFixed(1)} 天` +
+        (macro.nextMeeting.hasProjections ? '（同场发布经济预测与点阵图）' : ''),
+    );
+  }
+
+  if (macro.news.length) {
+    lines.push('美联储近期发布：');
+    macro.news.slice(0, 6).forEach((n) => {
+      lines.push(`- [${new Date(n.publishedAt).toISOString().slice(0, 10)}] (${n.source}) ${n.title}`);
+    });
+  }
+
+  return lines.join('\n');
 }
 
 const zh = (b: string) => ({ bullish: '多头', bearish: '空头', neutral: '中性' })[b] ?? b;
