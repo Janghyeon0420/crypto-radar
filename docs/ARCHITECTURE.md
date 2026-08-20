@@ -9,8 +9,14 @@
                     │
                     ├── lib/datasources/   数据源适配器：把各家 API 归一化成统一契约
                     ├── lib/indicators/    技术指标计算（确定性，无 LLM 参与）
-                    └── lib/analysis/      LLM 研判（只在服务端，持有 API Key）
+                    ├── lib/analysis/      LLM 研判（只在服务端，持有 API Key）
+                    ├── lib/alerts/        告警：规则求值 + 常驻轮询 + 通知分发
+                    └── lib/history/       研判存档、结果复用判定、准确率回测
 ```
+
+服务端还有一条不由浏览器触发的路径：`instrumentation.ts` 在服务启动时拉起
+`lib/alerts/worker.ts` 的轮询循环，它自行取数、求值、推送通知，
+不依赖任何页面处于打开状态。
 
 ### 为什么实时行情让浏览器直连，K 线却走服务端
 
@@ -32,30 +38,54 @@ src/
 │   │   ├── market/symbols/    全部 USDT 交易对（供搜索）
 │   │   ├── derivatives/       OKX 资金费率 / 持仓量
 │   │   ├── sentiment/         恐惧贪婪指数
-│   │   ├── news/              RSS 聚合（必须服务端拉，浏览器有 CORS）
+│   │   ├── news/              加密资讯 RSS 聚合（必须服务端拉，浏览器有 CORS）
 │   │   ├── analysis/          LLM 综合研判（POST）
-│   │   └── health/            数据源健康检查
+│   │   ├── analysis/history/  研判存档 + 准确率统计（顺带评估到期记录）
+│   │   ├── alerts/rules/      告警规则增删改查
+│   │   ├── alerts/events/     已触发事件（浏览器轮询它来弹桌面通知）
+│   │   ├── alerts/status/     轮询进程状态与已启用的通知通道
+│   │   ├── alerts/test/       发一条测试通知，验证 webhook 配得对不对
+│   │   └── health/            数据源健康检查 + 服务端出口探测
+│   ├── layout.tsx
 │   └── page.tsx
-├── components/                UI 组件
-├── lib/
-│   ├── datasources/
-│   │   ├── types.ts           统一数据契约 ← 换数据源时上层不用动
-│   │   ├── http.ts            超时 / 重试 / 缓存 / 地理封锁识别
-│   │   ├── binance-vision.ts  现货行情（核心）
-│   │   ├── okx.ts             衍生品
-│   │   ├── sentiment.ts       情绪
-│   │   └── news.ts            资讯
-│   ├── indicators/
-│   │   ├── index.ts           MA / EMA / RSI / MACD / BOLL / ATR / KDJ / VWAP / 支撑阻力
-│   │   └── summary.ts         压缩成"当前技术面快照" + 透明的打分理由
-│   ├── analysis/
-│   │   ├── schema.ts          研判输出的 Zod 契约
-│   │   ├── prompt.ts          prompt 构造
-│   │   └── claude.ts          Claude 调用
-│   ├── stores/watchlist.ts    自选（localStorage）
-│   ├── ws/binance-stream.ts   WebSocket（自动重连）
-│   └── hooks/
-└── docs/
+├── instrumentation.ts         服务启动钩子：拉起告警轮询
+├── components/                UI 组件（Dashboard 为三栏容器，其余为面板）
+└── lib/
+    ├── datasources/
+    │   ├── types.ts           统一数据契约 ← 换数据源时上层不用动
+    │   ├── http.ts            超时 / 重试 / 缓存 / 地理封锁识别
+    │   ├── binance-vision.ts  现货行情（核心）
+    │   ├── okx.ts             衍生品
+    │   ├── sentiment.ts       情绪
+    │   └── news.ts            资讯
+    ├── indicators/
+    │   ├── index.ts           MA / EMA / RSI / MACD / BOLL / ATR / KDJ / VWAP / 支撑阻力
+    │   └── summary.ts         压缩成「当前技术面快照」+ 透明的打分理由
+    ├── analysis/
+    │   ├── schema.ts          研判输出的 Zod 契约
+    │   ├── prompt.ts          prompt 构造
+    │   ├── runner.ts          研判入口，供应商无关
+    │   └── providers/
+    │       ├── index.ts             按配置选供应商（显式 > 自动推断）
+    │       ├── types.ts             供应商统一接口
+    │       ├── anthropic.ts         Anthropic 格式，structured outputs
+    │       ├── openai-compatible.ts DeepSeek 与 OpenAI 格式中转站
+    │       ├── schema-prompt.ts     Zod schema → 给模型看的格式说明
+    │       └── json-repair.ts       提取 JSON、剥代码块围栏、Zod 校验
+    ├── alerts/
+    │   ├── types.ts           规则与事件结构
+    │   ├── engine.ts          求值纯函数（含冷却期去抖）
+    │   ├── worker.ts          常驻轮询：调度、取数、持久化、通知
+    │   ├── store.ts           规则与事件落盘（data/alert-*.json，写串行化）
+    │   └── notify/            通道可插拔：群机器人 / Telegram / 消息格式化
+    ├── history/
+    │   ├── types.ts           研判存档结构与各时间尺度的检验周期
+    │   ├── store.ts           存档落盘（data/analyses.json，写串行化）
+    │   ├── cache.ts           研判结果复用判定（省钱，见决策 7）
+    │   └── evaluate.ts        到期评估、置信度校准、无脑基线对比
+    ├── stores/watchlist.ts    自选（localStorage）
+    ├── ws/binance-stream.ts   WebSocket（自动重连）
+    └── hooks/
 ```
 
 ## 关键设计决策
@@ -87,7 +117,21 @@ Prompt 里明确要求"不要重新计算任何指标"。
 Schema 里刻意包含 `dataGaps`（数据缺口）和 `risks`（风险）两个必填字段，
 逼模型说出它没看到什么、判断可能怎么错——避免只输出一段乐观叙事。
 
-### 4. 规则引擎与 LLM 并存
+### 4. 供应商抽象：把"能不能连上"和"支不支持强校验"两件事分开
+
+`providers/` 下每家供应商实现同一个接口，`runner.ts` 完全不知道背后是谁。
+这层抽象不是为了好看，是被两个现实问题逼出来的：
+
+- **网络可达性因地而异**：Anthropic 官方在中国大陆需要代理，
+  DeepSeek 直连可达，中转站则因节点而异。用户必须能换。
+- **只有 Anthropic 原生支持 structured outputs**。其余供应商走 `json_object` 模式，
+  只保证"是合法 JSON"，字段对不对全靠 prompt 引导。
+  所以有 `schema-prompt.ts`（注入格式说明）与 `json-repair.ts`
+  （剥代码块围栏、抽出 JSON、Zod 校验，失败时带着具体字段错误重试一次）。
+
+上层看到的始终是一个已经通过 Zod 校验的 `Analysis` 对象。
+
+### 5. 规则引擎与 LLM 并存
 
 `summary.ts` 里有一套透明的加权打分，输出 `bias` 和逐条 `reasons`。
 它有两个作用：直接显示在指标面板上（不花钱、不延迟）；
@@ -95,13 +139,70 @@ Schema 里刻意包含 `dataGaps`（数据缺口）和 `risks`（风险）两个
 
 用户能同时看到"规则怎么说"和"模型怎么说"，两者分歧时反而是有价值的信号。
 
-### 5. 数据源健康检查是一等公民
+**注意**：这套权重目前是凭经验拍的，没有数据支撑（见 `docs/ROADMAP.md` 第 7 项）。
+
+### 6. 告警在服务端求值，浏览器只订阅
+
+`engine.ts` 是一组纯函数（输入快照，输出事件），`worker.ts` 负责调度它。
+两者分开，使得同一套判定逻辑既能被常驻进程调用，也能被单元测试直接喂数据。
+
+三个容易踩的点，都已经踩过：
+
+- **浏览器端求值必须彻底移除**。两边同时求值会重复触发、通知发两遍。
+- **规则必须存服务端文件**。存 localStorage 的话常驻进程根本读不到——
+  那这个功能就白做了。旧规则做了一次性自动迁移。
+- **worker 状态挂 `globalThis`**。Next.js 把 instrumentation 与 API 路由
+  编译进不同模块图，模块级变量在两边是各自独立的副本，
+  会导致 `/api/alerts/status` 永远读到初始值、界面误报"未运行"。
+
+代价：告警随服务进程存活，关掉终端就停。要 7×24 需用 pm2 常驻或部署到服务器。
+
+### 7. 研判结果按波动率复用，而不是按固定时长
+
+每次研判是一次真实付费调用（实测 23-95 秒）。`history/cache.ts` 按
+(距上次研判时长 + 价格漂移 / 上次 ATR%) 判定是否复用上次结论。
+
+两个关键点：
+
+- 漂移阈值必须**相对标的自身波动率**换算。固定百分比会让低波动币几乎永远命中缓存、
+  高波动币几乎永远不命中。
+- 缓存判定放在拉 K 线**之前**，命中时把 3 次 K 线请求和 1 次 LLM 调用一并省掉；
+  且**命中不写新存档**——同一次研判被计入准确率两次会污染回测数据。
+
+### 8. 每次研判都存档，并自动回头检验
+
+`history/` 把每次研判连同当时的价格与 ATR% 存下来，到期后拉真实行情自动评估。
+设计上有两处刻意为之：
+
+- **有效波动阈值由标的自身 ATR 推导**，不是固定百分比。
+  否则高波动币会被判成"总是判断正确"（它总在大涨大跌）。
+- **永远并排显示"无脑猜同一方向"的基线**。跑不赢基线的模型没有价值，
+  这个对比必须自动摆在眼前，而不是等人想起来算。
+
+置信度校准表（"模型说 80 分时实际对多少"）是这里最有价值的产出。
+
+### 9. 数据源健康检查是一等公民
 
 `/api/health` 和顶部状态条不是运维摆设。在受地区限制的网络下，
 "某个源今天通不通"是真实会变的状态。图表空白时用户需要立刻知道
-是网络、上游还是代码的问题。
+是网络、上游还是代码的问题。同一接口还会探测**服务端出口 IP 与国家**——
+Node 的 fetch 默认不读 `HTTP_PROXY`，服务端很可能在用户毫不知情的情况下绕过 VPN 直连。
+
+## 数据存储
+
+全部是 `data/` 下的 JSON 文件，不入库（`.gitignore` 已排除）：
+
+| 文件 | 内容 | 写入方 |
+|---|---|---|
+| `analyses.json` | 研判存档与评估结果 | 研判接口、历史接口 |
+| `alert-rules.json` | 告警规则 | 规则接口、worker（更新触发时间） |
+| `alert-events.json` | 已触发事件 | worker |
+
+单人本地工具，文件足够；上数据库属于过度设计。三个文件的写入都做了串行化——
+Next.js 路由并发处理，worker 也在并发写，两边同时 read-modify-write 会丢数据。
 
 ## 成本
 
 除 LLM 研判外，全部数据源免费无 Key。研判为手动触发（不自动轮询），
-单次调用输入约 2-4K token，按 Claude Opus 5 定价约 $0.02-0.05/次。
+单次调用输入约 2-4K token，按 Claude Opus 5 定价约 $0.02-0.05/次；
+命中缓存则为 0。
