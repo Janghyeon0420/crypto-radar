@@ -16,34 +16,25 @@ export function MicrostructurePanel({
   source,
 }: {
   symbol: string;
-  /** 该币的数据来自哪家。盘口流只覆盖币安 */
+  /** 该币的数据来自哪家。币安与 OKX 各有一条盘口流 */
   source?: string;
 }) {
-  const unsupported = source !== undefined && source !== 'binance';
-  const m = useMicrostructure(unsupported ? '' : symbol);
+  const m = useMicrostructure(symbol, source);
 
   return (
     <div className="border-b border-zinc-800 px-4 py-3">
       <div className="flex items-center justify-between">
         <span
           className="cursor-help text-xs uppercase tracking-wide text-zinc-500"
-          title="来自 WebSocket 的秒级盘口与逐笔成交，统计窗口 60 秒。这是状态描述，不是方向信号——回测显示主动买卖占比不具备预测力。"
+          title="来自交易所 WebSocket 的秒级盘口与逐笔成交，统计窗口 60 秒。币安与 OKX 各有一条流，按该币的数据来源自动选择。这是状态描述，不是方向信号——回测显示主动买卖占比不具备预测力。"
         >
           盘口 · 近 60 秒
         </span>
         <span className="text-[11px] text-zinc-600">
-          {unsupported ? '不可用' : m ? `${m.tradeCount} 笔 · ${formatCompact(m.turnover)} USDT` : '连接中…'}
+          {m ? `${m.tradeCount} 笔 · ${formatCompact(m.turnover)} USDT` : '连接中…'}
+          {source === 'okx' && <span className="ml-1 text-zinc-700">· OKX</span>}
         </span>
       </div>
-
-      {/* 说清楚为什么没有，而不是让它一直「连接中…」——
-          那种状态看上去像马上就好，实际永远不会好 */}
-      {unsupported && (
-        <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
-          {symbol.replace(/USDT$|USDC$/, '')} 的行情来自 {String(source).toUpperCase()}，
-          而秒级盘口流目前只接了币安。图表、指标、告警、研判均不受影响。
-        </p>
-      )}
 
       {m && (
         <>

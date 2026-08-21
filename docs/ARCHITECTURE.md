@@ -38,6 +38,7 @@ src/
 │   │   ├── market/symbols/    全部 USDT 交易对（供搜索）
 │   │   ├── market/resonance/  1h/4h/1d 多周期一致性
 │   │   ├── market/compare/    多币种横向对比与相对强弱
+│   │   ├── market/routes/     查询币种的数据来源，供前端分流 WS
 │   │   ├── onchain/           稳定币供应 + BTC 网络
 │   │   ├── derivatives/       OKX 资金费率 / 持仓量
 │   │   ├── sentiment/         恐惧贪婪指数
@@ -102,8 +103,10 @@ src/
     ├── macro/
     │   └── hawkdove.ts        鹰鸽判断：词典 + 投票分歧 + 对加密的传导
     ├── stores/watchlist.ts    自选（localStorage）
-    ├── ws/binance-stream.ts   实时价格 WebSocket（自动重连）
-    ├── ws/microstructure.ts   盘口与主动成交（秒级，只订阅当前币）
+    ├── ws/binance-stream.ts   币安实时价格 WebSocket（自动重连）
+    ├── ws/okx-stream.ts       OKX 实时价格（需自发心跳，重连要重订阅）
+    ├── ws/microstructure.ts   币安盘口与主动成交（秒级，只订阅当前币）
+    ├── ws/okx-microstructure.ts  OKX 盘口与主动成交
     └── hooks/
 ```
 

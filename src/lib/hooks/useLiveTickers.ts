@@ -1,55 +1,80 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BinanceStream, type MiniTick } from '../ws/binance-stream';
+import { OkxStream } from '../ws/okx-stream';
 
 /**
  * 订阅一组币种的实时行情。
  *
- * 返回 symbol -> MiniTick 的 map。组件用它做实时价格更新，
- * 而 24h 统计等仍走 REST 兜底——WebSocket 只在有成交时推送，
- * 冷门币可能几分钟不动，光靠 WS 会让面板长时间空着。
+ * 返回 symbol -> MiniTick 的 map。两条 WebSocket 并存：
+ * 币安一条、OKX 一条，按服务端给出的路由把币种分到各自的流里。
+ * 上层拿到的是同一个 MiniTick，不需要知道数据来自哪家。
  *
- * **币安没有的币种（如 HYPE，数据来自 OKX）走 REST 轮询兜底**。
- * 实测把 `hypeusdt@miniTicker` 混进币安组合流不会拒连、也不影响其它币，
- * 但那一路永远收不到数据——于是那个币的价格会一直停在首屏那一刻，
- * 看上去像「行情不动了」而不是「没有数据源」。这种静默失真必须避免。
+ * **路由只信服务端**（/api/market/routes）。前端不自己维护
+ * 「哪些币在 OKX」的名单——两处规则迟早不一致，而那种不一致的表现是
+ * 「某个币的价格不动了」，几乎不可能联想到是路由判断分歧。
+ *
+ * REST 轮询继续保留作为兜底：WebSocket 只在有成交时推送，
+ * 冷门币可能几分钟不动；路由还没拉到时也靠它先把价格填上。
  */
 const REST_POLL_MS = 10_000;
 
 export function useLiveTickers(symbols: string[]): Record<string, MiniTick> {
   const [ticks, setTicks] = useState<Record<string, MiniTick>>({});
-  const streamRef = useRef<BinanceStream | null>(null);
+  const [routes, setRoutes] = useState<Record<string, string>>({});
+  const binanceRef = useRef<BinanceStream | null>(null);
+  const okxRef = useRef<OkxStream | null>(null);
 
+  const key = useMemo(() => [...symbols].sort().join(','), [symbols]);
+
+  // 两条流各建一次，symbols 变化只改订阅
   useEffect(() => {
-    const stream = new BinanceStream();
-    streamRef.current = stream;
-    const unsubscribe = stream.subscribe((tick) => {
-      setTicks((prev) => ({ ...prev, [tick.symbol]: tick }));
-    });
+    const binance = new BinanceStream();
+    const okx = new OkxStream();
+    binanceRef.current = binance;
+    okxRef.current = okx;
+
+    const onTick = (tick: MiniTick) => setTicks((prev) => ({ ...prev, [tick.symbol]: tick }));
+    const offB = binance.subscribe(onTick);
+    const offO = okx.subscribe(onTick);
+
     return () => {
-      unsubscribe();
-      stream.close();
-      streamRef.current = null;
+      offB();
+      offO();
+      binance.close();
+      okx.close();
+      binanceRef.current = null;
+      okxRef.current = null;
     };
   }, []);
 
-  // symbols 变化时只改订阅，不重建连接对象
+  // 查询路由。失败时全部按币安处理——绝大多数币在币安，
+  // 猜错的代价是那一路收不到数据，而 REST 轮询会兜住
   useEffect(() => {
-    streamRef.current?.setSymbols(symbols);
-  }, [symbols]);
+    if (!key) return;
+    const ac = new AbortController();
+    fetch(`/api/market/routes?symbols=${key}`, { signal: ac.signal })
+      .then((r) => r.json())
+      .then((d: { routes?: Record<string, string> }) => setRoutes(d.routes ?? {}))
+      .catch(() => {});
+    return () => ac.abort();
+  }, [key]);
+
+  // 按路由分流
+  useEffect(() => {
+    if (!key) return;
+    const list = key.split(',');
+    binanceRef.current?.setSymbols(list.filter((s) => routes[s] !== 'okx'));
+    okxRef.current?.setSymbols(list.filter((s) => routes[s] === 'okx'));
+  }, [key, routes]);
 
   /**
    * REST 兜底轮询。
    *
-   * 对所有币种都跑，而不是只对 OKX 的——因为「哪个币在哪家」是服务端的判断，
-   * 前端不该自己维护一份可能过期的名单。多几个 REST 请求的代价，
-   * 小于两处路由规则不一致带来的困惑。
-   *
-   * WS 推来的数据更新鲜，所以只在该币还没有 WS 数据、
-   * 或 REST 的时间戳更新时才覆盖。
+   * 对所有币种都跑，不区分来源：路由还没返回时它是唯一的价格来源，
+   * 而 WS 推来的数据更新鲜，所以只在该币的 WS 数据已经过期时才覆盖。
    */
-  const key = [...symbols].sort().join(',');
   useEffect(() => {
     if (!key) return;
     const ac = new AbortController();
@@ -58,8 +83,16 @@ export function useLiveTickers(symbols: string[]): Record<string, MiniTick> {
       try {
         const res = await fetch(`/api/market/tickers?symbols=${key}`, { signal: ac.signal });
         if (!res.ok) return;
-        const data: { tickers: { symbol: string; last: number; high24h: number; low24h: number; quoteVolume24h: number; changePercent: number }[] } =
-          await res.json();
+        const data: {
+          tickers: {
+            symbol: string;
+            last: number;
+            high24h: number;
+            low24h: number;
+            quoteVolume24h: number;
+            changePercent: number;
+          }[];
+        } = await res.json();
 
         setTicks((prev) => {
           const next = { ...prev };
