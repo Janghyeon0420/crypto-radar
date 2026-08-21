@@ -50,7 +50,7 @@ src/
 │   │   └── health/            数据源健康检查 + 服务端出口探测
 │   ├── layout.tsx
 │   └── page.tsx
-├── instrumentation.ts         服务启动钩子：拉起告警轮询
+├── instrumentation.ts         服务启动钩子：拉起告警轮询 + 预热宏观缓存
 ├── components/                UI 组件（Dashboard 为三栏容器，其余为面板）
 └── lib/
     ├── datasources/
@@ -97,7 +97,8 @@ src/
     ├── macro/
     │   └── hawkdove.ts        鹰鸽判断：词典 + 投票分歧 + 对加密的传导
     ├── stores/watchlist.ts    自选（localStorage）
-    ├── ws/binance-stream.ts   WebSocket（自动重连）
+    ├── ws/binance-stream.ts   实时价格 WebSocket（自动重连）
+    ├── ws/microstructure.ts   盘口与主动成交（秒级，只订阅当前币）
     └── hooks/
 ```
 

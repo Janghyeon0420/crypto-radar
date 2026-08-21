@@ -9,6 +9,18 @@ import { fetchMacroSnapshot } from '@/lib/datasources/macro';
  * 反复请求不会打到美联储。
  */
 export async function GET() {
+  const started = Date.now();
   const macro = await fetchMacroSnapshot();
+  const ms = Date.now() - started;
+
+  // 冷缓存时这里会拉十几个上游，慢是正常的；但慢到什么程度必须看得见。
+  // 只在明显偏慢时记一笔，正常情况不刷屏
+  if (ms > 3000) {
+    console.log(
+      `[macro] 快照耗时 ${ms}ms（冷缓存）· 序列 ${macro.series.length} · ` +
+        `声明 ${macro.statement ? 'ok' : '无'} · 资讯 ${macro.news.length}`,
+    );
+  }
+
   return NextResponse.json(macro);
 }

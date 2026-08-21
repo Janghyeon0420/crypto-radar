@@ -31,6 +31,7 @@ type RawKline = [
   closeTime: number,
   quoteVolume: string,
   trades: number,
+  takerBuyBase: string,
   ...rest: unknown[],
 ];
 
@@ -50,6 +51,7 @@ export async function fetchCandles(
     close: +k[4],
     volume: +k[5],
     trades: k[8],
+    takerBuyVolume: +k[9],
   }));
 }
 

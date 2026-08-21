@@ -67,6 +67,20 @@ export interface TechnicalSnapshot {
     vwap: number;
   };
 
+  /**
+   * 主动成交方向。唯一能从 K 线里读出的微观结构信息。
+   *
+   * takerBuyRatio 本身没什么用——它常年在 50% 附近，而波动幅度随周期
+   * 差好几倍（实测 1h 标准差 8.4、1d 只有 2.5）。真正有含义的是
+   * **相对该周期自身分布偏离了多少**，所以同时给出 z 分数。
+   */
+  flow: {
+    /** 主动买入占总成交的比例 % */
+    takerBuyRatio: number;
+    /** 相对近 60 根的均值偏离了几个标准差 */
+    zScore: number;
+  } | null;
+
   levels: {
     /** 距现价最近的下方支撑，从近到远 */
     supports: number[];
@@ -125,6 +139,8 @@ export function buildTechnicalSnapshot(
   const vol20 = sma(volume, 20);
   const volRatio = last(vol20) ? last(volume) / last(vol20) : 1;
 
+  const flow = takerFlow(candles);
+
   const { support, resistance } = pivotLevels(high, low, 5, 5);
   const supports = [...new Set(support.filter((v) => v < price))]
     .sort((a, b) => b - a)
@@ -149,6 +165,7 @@ export function buildTechnicalSnapshot(
     price,
     ma200,
     alignment,
+    flowZ: flow?.zScore ?? null,
     rsi14,
     histNow,
     cross,
@@ -175,6 +192,7 @@ export function buildTechnicalSnapshot(
     kdj: { k: last(k.k), d: last(k.d), j: last(k.j) },
     volatility: { atr14, atrPercent: (atr14 / price) * 100 },
     volume: { current: last(volume), ratio20: volRatio, vwap: last(vwap(high, low, close, volume)) },
+    flow,
     levels: { supports, resistances },
     bias,
     reasons,
@@ -194,7 +212,8 @@ export type SignalId =
   | 'above_ma200'
   | 'macd_histogram'
   | 'macd_cross'
-  | 'rsi_extreme';
+  | 'rsi_extreme'
+  | 'taker_flow';
 
 export interface Signal {
   id: SignalId;
@@ -239,6 +258,9 @@ export const SIGNAL_WEIGHTS: Record<SignalId, number> = {
   macd_histogram: 1,
   macd_cross: 1.5,
   rsi_extreme: 0.5,
+  // 候选信号，权重为 0 = 参与检测与展示，但不影响 bias。
+  // 回测证明有信息量之前不给它话语权——这是规则引擎那次留下的规矩
+  taker_flow: 0,
 };
 
 /** 上次跑回测核对这套权重的日期。npm run backtest -- --apply 会更新它 */
@@ -253,6 +275,8 @@ export interface SignalInput {
   cross: 'golden' | 'death' | 'none';
   volRatio: number;
   squeeze: boolean;
+  /** 主动成交方向的 z 分数，无数据时为 null */
+  flowZ: number | null;
 }
 
 /**
@@ -315,6 +339,24 @@ export function detectSignals(x: SignalInput): Signal[] {
     });
   }
 
+  // 主动成交方向。阈值 1.5 个标准差——按正态约 13% 的时间触发，
+  // 既不会天天响，也不至于几个月才出现一次
+  if (x.flowZ != null && Math.abs(x.flowZ) >= 1.5) {
+    signals.push(
+      x.flowZ > 0
+        ? {
+            id: 'taker_flow',
+            direction: 'bullish',
+            reason: `主动买入占比异常偏高（${x.flowZ.toFixed(1)}σ），买方在吃单`,
+          }
+        : {
+            id: 'taker_flow',
+            direction: 'bearish',
+            reason: `主动卖出占比异常偏高（${Math.abs(x.flowZ).toFixed(1)}σ），卖方在砸单`,
+          },
+    );
+  }
+
   return signals;
 }
 
@@ -348,6 +390,36 @@ function scoreBias(x: SignalInput): { bias: Bias; reasons: string[] } {
   const signals = detectSignals(x);
   const { bias } = scoreSignals(signals);
   return { bias, reasons: [...signals.map((s) => s.reason), ...contextReasons(x)] };
+}
+
+/**
+ * 主动买入占比及其 z 分数。
+ *
+ * 用滚动窗口的均值与标准差，而不是固定阈值——固定阈值在 1h 上天天触发、
+ * 在 1d 上永远不触发，因为两者的波动幅度差三倍以上。
+ * 这与本项目里用 ATR 推导「有效波动」是同一个道理。
+ */
+const FLOW_WINDOW = 60;
+
+function takerFlow(candles: Candle[]): TechnicalSnapshot['flow'] {
+  const ratios = candles
+    .filter((c) => c.takerBuyVolume != null && c.volume > 0)
+    .map((c) => (c.takerBuyVolume! / c.volume) * 100);
+
+  // 样本太少时标准差不可靠，宁可不给 z 分数
+  if (ratios.length < 20) return null;
+
+  const current = ratios[ratios.length - 1];
+  const window = ratios.slice(-FLOW_WINDOW);
+  const mean = window.reduce((a, b) => a + b, 0) / window.length;
+  const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / window.length;
+  const sd = Math.sqrt(variance);
+
+  return {
+    takerBuyRatio: current,
+    // 标准差为 0（成交极度单一）时 z 分数无意义，退回 0 而不是 Infinity
+    zScore: sd > 0.01 ? (current - mean) / sd : 0,
+  };
 }
 
 function quantile(arr: number[], q: number): number {

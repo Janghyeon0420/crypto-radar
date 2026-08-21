@@ -11,7 +11,20 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-const cache = new Map<string, CacheEntry>();
+/**
+ * 缓存挂在 globalThis 上，而不是模块级变量。
+ *
+ * 与 alerts/worker.ts 是同一个原因：Next.js 把 instrumentation 与 API 路由
+ * 编译进不同的模块图，模块级变量在两边是各自独立的副本。
+ * 后果是启动预热拉到的数据，API 路由根本看不见——预热等于白做，
+ * 而告警 worker 与路由也会各自向上游要一遍同样的数据。
+ *
+ * 这类问题不会报错，只会表现为「明明缓存了却还是慢」。
+ */
+const CACHE_KEY = Symbol.for('crypto-radar.http.cache');
+const g = globalThis as unknown as Record<symbol, Map<string, CacheEntry> | undefined>;
+g[CACHE_KEY] ??= new Map<string, CacheEntry>();
+const cache = g[CACHE_KEY];
 
 export interface FetchOptions {
   /** 缓存存活时间（毫秒），0 表示不缓存 */

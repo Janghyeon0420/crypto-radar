@@ -39,12 +39,39 @@ export interface Observation {
 }
 
 /**
+ * 判定「有效波动」的阈值函数。
+ *
+ * 默认用 history/evaluate.ts 那一套（ATR% 夹在 1%~10%），它是为
+ * 数日到数周的研判设计的。但**短周期短跨度必须换一套**：
+ * 5 分钟线向前看 3 根，要求 1% 的波动等于几乎一切都被判成震荡，
+ * 于是任何信号都测不出方向性——那不是信号没用，是尺子不对。
+ */
+export type ThresholdFn = (atrPercent: number, horizon: number) => number;
+
+export const defaultThreshold: ThresholdFn = (atrPercent) => thresholdFor(atrPercent);
+
+/**
+ * 短跨度用的阈值：按 ATR% 乘以 √horizon 缩放，不设下限钳制。
+ * √ 是因为随机游走下波动随时间的平方根增长。
+ */
+export const shortHorizonThreshold: ThresholdFn = (atrPercent, horizon) => {
+  const base = Number.isFinite(atrPercent) && atrPercent > 0 ? atrPercent : 0.2;
+  return Math.max(base * Math.sqrt(horizon) * 0.5, 0.02);
+};
+
+/**
  * 在一段 K 线上逐根重放规则引擎。
  *
  * @param horizon 向前看多少根判定结果。取值应与该周期的实际用途匹配——
  *   1h 上看 24 根≈一天，1d 上看 7 根≈一周。
+ * @param threshold 判定有效波动的口径，短跨度须传 shortHorizonThreshold
  */
-export function replay(candles: Candle[], interval: Interval, horizon: number): Observation[] {
+export function replay(
+  candles: Candle[],
+  interval: Interval,
+  horizon: number,
+  threshold: ThresholdFn = defaultThreshold,
+): Observation[] {
   const out: Observation[] = [];
   // 至少要 60 根才出快照（summary.ts 的下限），再留出 horizon 根用于检验
   const start = 60;
@@ -64,16 +91,16 @@ export function replay(candles: Candle[], interval: Interval, horizon: number): 
       cross: snap.macd.cross,
       volRatio: snap.volume.ratio20,
       squeeze: snap.bollinger.squeeze,
+      flowZ: snap.flow?.zScore ?? null,
     });
 
     const from = candles[i].close;
     const to = candles[i + horizon].close;
     const changePercent = ((to - from) / from) * 100;
 
-    // 与准确率面板同一套「有效波动」定义，两边的数才能相互印证
-    const threshold = thresholdFor(snap.volatility.atrPercent);
+    const band = threshold(snap.volatility.atrPercent, horizon);
     const actual: Direction =
-      changePercent > threshold ? 'bullish' : changePercent < -threshold ? 'bearish' : 'neutral';
+      changePercent > band ? 'bullish' : changePercent < -band ? 'bearish' : 'neutral';
 
     out.push({
       signals: signals.map((s) => ({ id: s.id, direction: s.direction })),

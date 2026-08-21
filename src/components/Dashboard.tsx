@@ -18,6 +18,7 @@ import { SourceHealthBar } from './SourceHealthBar';
 import { AlertsPanel } from './AlertsPanel';
 import { MacroPanel } from './MacroPanel';
 import { ResonancePanel } from './ResonancePanel';
+import { MicrostructurePanel } from './MicrostructurePanel';
 import { AccuracyPanel } from './AccuracyPanel';
 import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
@@ -224,6 +225,7 @@ export function Dashboard() {
             {tab === 'indicators' && (
               <>
                 <ResonancePanel symbol={active} />
+                <MicrostructurePanel symbol={active} />
                 <IndicatorPanel tech={data?.technical ?? null} />
                 <div className="border-t border-zinc-800">
                   <NewsPanel baseAsset={baseAsset} />

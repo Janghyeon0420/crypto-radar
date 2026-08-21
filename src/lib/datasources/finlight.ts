@@ -53,7 +53,12 @@ export interface FinlightQuery {
  * 不走 http.ts 的 fetchJson，因为那边按 URL 做键，而这里是 POST——
  * 同一个 URL 不同请求体是不同结果，用 URL 当键会串数据。
  */
-const cache = new Map<string, { at: number; items: NewsItem[] }>();
+// 同样挂 globalThis：Next 的 instrumentation 与路由是两份模块副本，
+// 模块级 Map 会导致启动预热与实际请求各用各的缓存（见 http.ts 的说明）
+const CACHE_KEY = Symbol.for('crypto-radar.finlight.cache');
+const g = globalThis as unknown as Record<symbol, Map<string, { at: number; items: NewsItem[] }> | undefined>;
+g[CACHE_KEY] ??= new Map();
+const cache = g[CACHE_KEY];
 const TTL_MS = 5 * 60_000;
 
 export async function fetchFinlight(q: FinlightQuery): Promise<NewsItem[]> {

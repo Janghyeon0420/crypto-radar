@@ -21,6 +21,14 @@ export interface Candle {
   volume: number;
   /** 成交笔数，部分数据源可能缺失 */
   trades?: number;
+  /**
+   * 主动买入量（taker buy base volume）。
+   *
+   * 即「以卖一价成交」的那部分量——买方主动吃单。它与总量的比值
+   * 是唯一能从 K 线里直接读出的微观结构信息：同样一根阳线，
+   * 主动买入占七成和占四成，含义完全不同。
+   */
+  takerBuyVolume?: number;
 }
 
 /** 24 小时行情快照 */
