@@ -5,6 +5,7 @@ import { fetchDerivatives } from '@/lib/datasources/okx';
 import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';
 import { fetchMacroSnapshot } from '@/lib/datasources/macro';
+import { fetchOnchainSnapshot } from '@/lib/datasources/onchain';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import {
   ProviderNotConfiguredError,
@@ -166,11 +167,12 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
   send({ stage: 'context' });
 
   // 衍生品/情绪/资讯/宏观是可选增强，任一失败都不该阻塞主流程
-  const [derivatives, sentiment, news, macro] = await Promise.allSettled([
+  const [derivatives, sentiment, news, macro, onchain] = await Promise.allSettled([
     fetchDerivatives(symbol),
     fetchFearGreed(),
     fetchNews(60),
     fetchMacroSnapshot(),
+    fetchOnchainSnapshot(),
   ]);
 
   // 模型这一步最长。把「上次这个币用了多久」一并告诉前端——
@@ -188,6 +190,7 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
       news:
         news.status === 'fulfilled' ? filterNewsByAsset(news.value, baseAsset).slice(0, 12) : [],
       macro: macro.status === 'fulfilled' ? macro.value : null,
+      onchain: onchain.status === 'fulfilled' ? onchain.value : null,
     });
 
     const record = {

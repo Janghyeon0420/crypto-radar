@@ -1,8 +1,18 @@
 'use client';
 
 import { useMacro, countdownToMeeting } from '@/lib/hooks/useMacro';
+import { useOnchain } from '@/lib/hooks/useOnchain';
 import { timeAgo } from '@/lib/format';
 import type { HawkDoveResult } from '@/lib/macro/hawkdove';
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-zinc-600">{label}</span>
+      <span className="font-mono text-zinc-300 tabular-nums">{value}</span>
+    </div>
+  );
+}
 
 const STANCE: Record<HawkDoveResult['stance'], { label: string; cls: string; bar: string }> = {
   hawkish: { label: '偏鹰', cls: 'text-rose-400', bar: 'bg-rose-500' },
@@ -24,6 +34,7 @@ const IMPACT: Record<string, string> = {
  */
 export function MacroPanel() {
   const { macro, loading } = useMacro();
+  const onchain = useOnchain();
 
   if (loading) return <div className="p-4 text-xs text-zinc-600">加载中…</div>;
   if (!macro) return <div className="p-4 text-xs text-zinc-600">宏观数据不可用</div>;
@@ -141,6 +152,63 @@ export function MacroPanel() {
             {macro.netLiquidity.components.tga.toFixed(0)}（十亿美元）
             <br />
             度量市场上实际可用的钱，比利率水平更直接。三项频率不同，日期未必对齐。
+          </p>
+        </section>
+      )}
+
+      {/* ── 场内流动性：与上面的美联储净流动性成对 ── */}
+      {onchain?.stablecoins && (
+        <section className="mb-4 rounded-lg bg-zinc-900/60 p-3">
+          <p className="text-xs text-zinc-500">稳定币总供应</p>
+          <p className="mt-1 font-mono text-lg text-zinc-100 tabular-nums">
+            {(onchain.stablecoins.totalBillions / 1000).toFixed(2)} 万亿
+            {onchain.stablecoins.change30d !== null && (
+              <span
+                className={`ml-2 text-xs ${
+                  onchain.stablecoins.change30d >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
+                近月 {onchain.stablecoins.change30d >= 0 ? '+' : ''}
+                {onchain.stablecoins.change30d.toFixed(2)}%
+              </span>
+            )}
+          </p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-600">
+            {onchain.stablecoins.change7d !== null && (
+              <>
+                近周 {onchain.stablecoins.change7d >= 0 ? '+' : ''}
+                {onchain.stablecoins.change7d.toFixed(2)}% ·{' '}
+              </>
+            )}
+            截至 {onchain.stablecoins.date} · DefiLlama
+            <br />
+            链上的「现金」。上面的净流动性是宏观水位，这个是场内水位。
+            <span className="text-zinc-700">
+              {' '}
+              回测显示其变化与后续涨跌无可用关系（npm run backtest:stablecoin），仅作水位参考。
+            </span>
+          </p>
+        </section>
+      )}
+
+      {/* ── BTC 网络状态 ── */}
+      {onchain?.btcNetwork && (
+        <section className="mb-4 rounded-lg bg-zinc-900/60 p-3">
+          <p className="mb-2 text-xs text-zinc-500">BTC 网络</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+            <Stat label="算力" value={`${onchain.btcNetwork.hashrate.toFixed(0)} EH/s`} />
+            <Stat label="BTC 占比" value={`${onchain.btcNetwork.dominance.toFixed(1)}%`} />
+            <Stat
+              label="待确认"
+              value={`${onchain.btcNetwork.mempoolTransactions.toLocaleString()} 笔`}
+            />
+            <Stat
+              label="建议费率"
+              value={`${onchain.btcNetwork.suggestedFeeSatPerByte} sat/vB`}
+            />
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+            网络拥堵与安全边际的描述，不作方向判断。
           </p>
         </section>
       )}

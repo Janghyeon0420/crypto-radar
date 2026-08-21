@@ -1,0 +1,64 @@
+# 提交前忘了跑测试就白写了——7 个测试文件、160 多条断言，
+# 需要有个东西替人记得跑。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 手动触发，用于改完 CI 本身时验证
+  workflow_dispatch:
+
+# 同一分支上新的推送取消掉还在跑的旧任务，省额度也省等待
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与本地开发保持一致。tsx 需要 Node 18+，这里锁 24 是为了
+          # 让 CI 跑的和本地跑的是同一套行为
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # 四步都跑完再决定成败，而不是第一步挂了就看不到后面的问题。
+      # 排查时「只有类型错」和「类型和测试都错」是两种不同的情况
+      - name: 类型检查
+        if: always()
+        run: npx tsc --noEmit
+
+      - name: Lint
+        if: always()
+        run: npx eslint
+
+      - name: 测试（离线）
+        if: always()
+        run: npm test
+
+      - name: 生产构建
+        if: always()
+        run: npm run build
+
+  # 联网测试单独一个 job：它依赖美联储官网的页面结构，
+  # 上游改版会让它失败——那是真实信息，但不该阻塞代码合并。
+  # 所以设为不影响整体结论，只在 PR 上留下记录。
+  live:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: 测试（含联网）
+        run: npm run test:live

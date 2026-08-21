@@ -11,6 +11,7 @@
     "test:live": "node scripts/test.mjs --live",
     "backtest": "tsx scripts/backtest-weights.mjs",
     "backtest:resonance": "tsx scripts/backtest-resonance.mjs",
+    "backtest:stablecoin": "tsx scripts/backtest-stablecoin.mjs",
     "backtest:flow": "tsx scripts/backtest-flow.mjs",
     "backtest:hawkdove": "tsx --env-file=.env.local scripts/backtest-hawkdove.mjs",
     "backup": "tsx scripts/backup-data.mjs",

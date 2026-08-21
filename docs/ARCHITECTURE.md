@@ -38,6 +38,7 @@ src/
 │   │   ├── market/symbols/    全部 USDT 交易对（供搜索）
 │   │   ├── market/resonance/  1h/4h/1d 多周期一致性
 │   │   ├── market/compare/    多币种横向对比与相对强弱
+│   │   ├── onchain/           稳定币供应 + BTC 网络
 │   │   ├── derivatives/       OKX 资金费率 / 持仓量
 │   │   ├── sentiment/         恐惧贪婪指数
 │   │   ├── news/              加密资讯 RSS 聚合（必须服务端拉，浏览器有 CORS）
@@ -65,6 +66,7 @@ src/
     │   ├── finlight.ts        金融资讯 API（广度覆盖，需免费 key）
     │   ├── fred.ts            FRED/ALFRED 宏观数值、净流动性、发布日历
     │   ├── fed-text.ts        美联储官方文档正文抓取
+    │   ├── onchain.ts         稳定币供应与 BTC 网络状态
     │   └── macro.ts           把以上组合成宏观快照
     ├── indicators/
     │   ├── index.ts           MA / EMA / RSI / MACD / BOLL / ATR / KDJ / VWAP / 支撑阻力
@@ -299,6 +301,7 @@ npm run test:live # 额外跑依赖真实网络的（拉美联储页面校验 HT
 | `test-alerts.mjs` | 告警求值语义的 22 个分支 | 该响没响、不该响却响了，都只能靠人回头核对才发现 |
 | `test-alert-lock.mjs` | 单实例锁的 17 个分支 | 锁太严则告警彻底停摆且无提示，太松则通知发两遍 |
 | `test-calibration.mjs` | 置信度校准的 29 个分支 | 算错只会安静地给出一个看起来很权威的错数字 |
+| `test-onchain.mjs` | 链上日期回看的 10 个分支 | 按下标而非天数回看会让百分比悄悄失真 |
 | `test-resonance.mjs` | 共振与回测统计的 38 个分支 | 开发中真的踩过：打分卡口径写错，差点据此改错权重 |
 | `test-hawkdove.mjs` | 鹰鸽判断的 31 个分支 | 两个真实 bug：异议句污染词典、中间名缩写截断名单 |
 | `test-cache.mjs` | 研判复用判定的 14 个边界 | 判错的后果是多花钱或用过期结论，两边都不会报错 |

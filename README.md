@@ -19,6 +19,8 @@
 - **研判价位上图** — 最近一次研判给出的支撑 / 阻力 / 失效价直接画在 K 线上
 - **基本面与情绪** — 永续合约资金费率、未平仓量、恐惧贪婪指数
 - **资讯聚合** — Cointelegraph / Decrypt / CoinDesk / 币安公告，按币种过滤
+- **链上** — 稳定币总供应（场内流动性，与美联储净流动性成对看）、
+  BTC 算力 / 拥堵 / 费率。已回测：稳定币供应变化**无预测力**，仅作水位参考
 - **宏观与政策** — 三层数据源：FRED 的净流动性（美联储总资产 − 逆回购 − 财政部账户）、
   利率/通胀/美元指数序列、CPI 与非农的发布日历；FOMC 议息倒计时；
   以及**基于官方声明原文的鹰鸽判断**——词典打分 + 投票分歧，
@@ -125,6 +127,8 @@ npm run netcheck:proxy
 npm run backtest             # 在历史 K 线上逐根重放规则引擎，测每个信号的信息量
 npm run backtest:resonance   # 测多周期共振判定
 npm run backtest:hawkdove    # 用历史 FOMC 声明与真实利率路径检验鹰鸽词典
+npm run backtest:flow        # 测主动成交方向
+npm run backtest:stablecoin  # 测稳定币供应变化
 ```
 
 两个脚本都按时间 7:3 切分（推权重的数据不参与验证），
@@ -152,6 +156,11 @@ npm run backup
 ```bash
 npm test
 ```
+
+每次 push 与 PR 都会在 GitHub Actions 上跑一遍类型检查、lint、离线测试与生产构建
+（[.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+联网测试是单独一个 job 且不阻塞——它依赖美联储官网的页面结构，
+上游改版会让它失败，那是真实信息但不该拦住代码合并。
 
 秒级返回，覆盖三处「错了不会立刻被发现」的逻辑：研判复用判定的边界、
 群机器人加签（写错是静默失败——HTTP 200 但消息不出现）、FOMC 日历解析。

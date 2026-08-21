@@ -9,6 +9,7 @@
 
 import type { TechnicalSnapshot } from '../indicators/summary';
 import { computeResonance } from '../indicators/resonance';
+import type { OnchainSnapshot } from '../datasources/onchain';
 import type {
   DerivativesSnapshot,
   MacroSnapshot,
@@ -31,6 +32,8 @@ export interface AnalysisInput {
    * 单币种的技术面解释不了这个。
    */
   macro: MacroSnapshot | null;
+  /** 链上：稳定币供应（场内流动性）与 BTC 网络状态 */
+  onchain: OnchainSnapshot | null;
 }
 
 export const SYSTEM_PROMPT = `你是一位加密货币市场分析师，服务于一个个人使用的行情看板。
@@ -61,7 +64,8 @@ export const SYSTEM_PROMPT = `你是一位加密货币市场分析师，服务�
 而是描述市场状态、可能的演化路径和各自的触发条件。`;
 
 export function buildUserPrompt(input: AnalysisInput): string {
-  const { symbol, baseAsset, ticker, technicals, derivatives, sentiment, news, macro } = input;
+  const { symbol, baseAsset, ticker, technicals, derivatives, sentiment, news, macro, onchain } =
+    input;
   const parts: string[] = [];
 
   parts.push(`# 分析标的：${symbol}（${baseAsset}）`);
@@ -125,6 +129,7 @@ export function buildUserPrompt(input: AnalysisInput): string {
   }
 
   parts.push(renderMacro(macro));
+  parts.push(renderOnchain(onchain));
 
   if (news.length) {
     parts.push('\n## 相关资讯（近期，按时间倒序）');
@@ -235,6 +240,46 @@ ${a.evidence
           .slice(0, 8)
           .map((n) => `- [${new Date(n.publishedAt).toISOString().slice(0, 10)}] (${n.source}) ${n.title}`)
           .join('\n'),
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 链上段落。
+ *
+ * 稳定币供应与美联储净流动性是一对：宏观水位与场内水位。
+ * 两者背离时值得注意——比如宏观在收紧而稳定币仍在增发，
+ * 说明有资金在逆着大环境进场。
+ *
+ * 明确标注「已回测、无预测力」：不这么说的话，模型很容易
+ * 把「稳定币增发」当成看涨依据写进结论——那个说法流传很广但没通过检验。
+ */
+function renderOnchain(onchain: AnalysisInput['onchain']): string {
+  if (!onchain || (!onchain.stablecoins && !onchain.btcNetwork)) {
+    return '\n## 链上\n无数据';
+  }
+
+  const lines = ['\n## 链上'];
+  const sc = onchain.stablecoins;
+  if (sc) {
+    lines.push(
+      `稳定币总供应：${sc.totalBillions.toFixed(0)} 十亿美元（截至 ${sc.date}）` +
+        (sc.change7d !== null ? `，近 7 天 ${sc.change7d >= 0 ? '+' : ''}${sc.change7d.toFixed(2)}%` : '') +
+        (sc.change30d !== null ? `，近 30 天 ${sc.change30d >= 0 ? '+' : ''}${sc.change30d.toFixed(2)}%` : '') +
+        `\n  —— 链上可随时买币的钱，与上面的美联储净流动性构成「场内 / 宏观」一对。` +
+        `\n     **已回测：供应变化与后续 7/14/30 天涨跌没有可用关系**（6 种组合，` +
+        `分组差异均小于 3pt）。可以用它描述水位，不要用它推方向。`,
+    );
+  }
+
+  const n = onchain.btcNetwork;
+  if (n) {
+    lines.push(
+      `BTC 网络：算力 ${n.hashrate.toFixed(0)} EH/s，待确认 ${n.mempoolTransactions} 笔，` +
+        `建议费率 ${n.suggestedFeeSatPerByte} sat/vB，BTC 市占 ${n.dominance.toFixed(1)}%` +
+        `\n  —— 拥堵与安全边际的描述，不构成方向依据。`,
     );
   }
 
