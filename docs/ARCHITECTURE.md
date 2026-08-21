@@ -58,8 +58,9 @@ src/
     ├── datasources/
     │   ├── types.ts           统一数据契约 ← 换数据源时上层不用动
     │   ├── http.ts            超时 / 重试 / 缓存 / 地理封锁识别
-    │   ├── binance-vision.ts  现货行情（核心）
-    │   ├── okx.ts             衍生品
+    │   ├── market.ts          行情路由：币安优先，币安没有的走 OKX
+    │   ├── binance-vision.ts  币安现货（主力源）
+    │   ├── okx.ts             OKX 现货 + 永续衍生品
     │   ├── sentiment.ts       情绪
     │   ├── rss.ts             极简 RSS 解析（news 与 macro 共用）
     │   ├── news.ts            加密行业资讯

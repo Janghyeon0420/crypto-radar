@@ -11,8 +11,16 @@ import { formatCompact, formatPrice } from '@/lib/format';
  * 所以这里不给方向判断、不配进度条、不加涨跌配色暗示——
  * 它回答的是「此刻正在发生什么」：价差是否变宽、这波成交是谁在主动。
  */
-export function MicrostructurePanel({ symbol }: { symbol: string }) {
-  const m = useMicrostructure(symbol);
+export function MicrostructurePanel({
+  symbol,
+  source,
+}: {
+  symbol: string;
+  /** 该币的数据来自哪家。盘口流只覆盖币安 */
+  source?: string;
+}) {
+  const unsupported = source !== undefined && source !== 'binance';
+  const m = useMicrostructure(unsupported ? '' : symbol);
 
   return (
     <div className="border-b border-zinc-800 px-4 py-3">
@@ -24,9 +32,18 @@ export function MicrostructurePanel({ symbol }: { symbol: string }) {
           盘口 · 近 60 秒
         </span>
         <span className="text-[11px] text-zinc-600">
-          {m ? `${m.tradeCount} 笔 · ${formatCompact(m.turnover)} USDT` : '连接中…'}
+          {unsupported ? '不可用' : m ? `${m.tradeCount} 笔 · ${formatCompact(m.turnover)} USDT` : '连接中…'}
         </span>
       </div>
+
+      {/* 说清楚为什么没有，而不是让它一直「连接中…」——
+          那种状态看上去像马上就好，实际永远不会好 */}
+      {unsupported && (
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+          {symbol.replace(/USDT$|USDC$/, '')} 的行情来自 {String(source).toUpperCase()}，
+          而秒级盘口流目前只接了币安。图表、指标、告警、研判均不受影响。
+        </p>
+      )}
 
       {m && (
         <>

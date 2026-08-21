@@ -8,7 +8,7 @@
  * 这里只负责调度、取数、持久化与通知。
  */
 
-import { fetchCandles, fetchTickers } from '../datasources/binance-vision';
+import { fetchCandles, fetchTickers } from '../datasources/market';
 import { buildTechnicalSnapshot, type TechnicalSnapshot } from '../indicators/summary';
 import { evaluateRules } from './engine';
 import { appendEvents, readRules, updateRules } from './store';

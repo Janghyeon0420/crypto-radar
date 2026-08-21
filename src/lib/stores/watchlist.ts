@@ -11,7 +11,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export const DEFAULT_WATCHLIST = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+// HYPE 在币安没有上架，数据来自 OKX（见 datasources/market.ts 的路由）
+export const DEFAULT_WATCHLIST = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'HYPEUSDT'];
 
 interface WatchlistState {
   symbols: string[];

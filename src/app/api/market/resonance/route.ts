@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchCandles } from '@/lib/datasources/binance-vision';
+import { fetchCandles } from '@/lib/datasources/market';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import { computeResonance } from '@/lib/indicators/resonance';
 import { apiError } from '@/lib/api-error';

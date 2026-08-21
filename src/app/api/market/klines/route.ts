@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchCandles } from '@/lib/datasources/binance-vision';
+import { fetchCandles, resolveExchange } from '@/lib/datasources/market';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import { INTERVALS, type Interval } from '@/lib/datasources/types';
 import { apiError } from '@/lib/api-error';
@@ -31,6 +31,10 @@ export async function GET(req: Request) {
     return NextResponse.json({
       symbol,
       interval,
+      // 数据来自哪家交易所。前端据此判断盘口流能不能用——
+      // 盘口只覆盖币安，非币安的币若一直显示「连接中…」，
+      // 看上去像马上就好，其实永远不会好
+      source: await resolveExchange(symbol),
       candles,
       technical: buildTechnicalSnapshot(candles, interval),
     });

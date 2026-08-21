@@ -61,6 +61,8 @@ function toPriceLines(lv: Levels): PriceLine[] {
 }
 
 interface KlineResponse {
+  /** 数据来自哪家交易所 */
+  source?: string;
   candles: Candle[];
   technical: TechnicalSnapshot | null;
 }
@@ -302,7 +304,7 @@ export function Dashboard() {
             {tab === 'indicators' && (
               <>
                 <ResonancePanel symbol={active} />
-                <MicrostructurePanel symbol={active} />
+                <MicrostructurePanel symbol={active} source={data?.source} />
                 <IndicatorPanel tech={data?.technical ?? null} />
                 <div className="border-t border-zinc-800">
                   <NewsPanel baseAsset={baseAsset} />

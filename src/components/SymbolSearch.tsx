@@ -2,20 +2,20 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useWatchlist } from '@/lib/stores/watchlist';
-import type { SymbolInfo } from '@/lib/datasources/binance-vision';
+import type { RoutedSymbol } from '@/lib/datasources/market';
 
 /** 添加自选。交易对列表一次拉全（约 500 个），在前端做匹配，无需每次输入都打接口。 */
 export function SymbolSearch() {
   const add = useWatchlist((s) => s.add);
   const existing = useWatchlist((s) => s.symbols);
-  const [all, setAll] = useState<SymbolInfo[]>([]);
+  const [all, setAll] = useState<RoutedSymbol[]>([]);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     fetch('/api/market/symbols')
       .then((r) => (r.ok ? r.json() : { symbols: [] }))
-      .then((d: { symbols: SymbolInfo[] }) => setAll(d.symbols))
+      .then((d: { symbols: RoutedSymbol[] }) => setAll(d.symbols))
       .catch(() => setAll([]));
   }, []);
 
@@ -55,7 +55,16 @@ export function SymbolSearch() {
                   }}
                   className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-800"
                 >
-                  <span className="text-zinc-100">{m.baseAsset}</span>
+                  <span className="flex items-baseline gap-2">
+                    <span className="text-zinc-100">{m.baseAsset}</span>
+                    {/* 只标注非币安来源。给币安的也标会让 99% 的行多出无用噪音，
+                        而「这个币的数据来自别家」是用户有权知道的信息 */}
+                    {m.exchange !== 'binance' && (
+                      <span className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] uppercase text-zinc-500">
+                        {m.exchange}
+                      </span>
+                    )}
+                  </span>
                   <span className="text-xs text-zinc-500">
                     {added ? '已在自选' : m.symbol}
                   </span>

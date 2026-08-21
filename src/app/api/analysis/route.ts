@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { fetchCandles, fetchTickers } from '@/lib/datasources/binance-vision';
+import { fetchCandles, fetchTickers } from '@/lib/datasources/market';
 import { fetchDerivatives } from '@/lib/datasources/okx';
 import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';

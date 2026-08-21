@@ -8,7 +8,7 @@
  *     这个对比必须自动摆在眼前，而不是等人想起来算。
  */
 
-import { fetchCandles } from '../datasources/binance-vision';
+import { fetchCandles } from '../datasources/market';
 import { readRecords, updateRecords } from './store';
 import type { AnalysisRecord, AccuracyStats, Evaluation } from './types';
 import { HORIZON_MS } from './types';

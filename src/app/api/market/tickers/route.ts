@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchTickers } from '@/lib/datasources/binance-vision';
+import { fetchTickers } from '@/lib/datasources/market';
 import { apiError } from '@/lib/api-error';
 
 /** 自选列表的 24h 行情。symbols 用逗号分隔，不传则返回全市场（响应较大，慎用）。 */
