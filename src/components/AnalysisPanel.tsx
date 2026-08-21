@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { Analysis } from '@/lib/analysis/schema';
+import type { Calibration } from '@/lib/history/calibrate';
 import { formatPrice, timeAgo } from '@/lib/format';
 
 const DIRECTION = {
@@ -38,6 +39,8 @@ export function AnalysisPanel({
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
   /** 本次结果是否来自缓存，以及复用的理由 */
   const [cache, setCache] = useState<{ cached: boolean; reason?: string } | null>(null);
+  /** 用历史命中率校准后的置信度。样本不够时是 insufficient，不出数 */
+  const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +63,7 @@ export function AnalysisPanel({
       setAnalysis(data.analysis);
       setGeneratedAt(data.generatedAt);
       setCache({ cached: Boolean(data.cached), reason: data.cacheReason });
+      setCalibration(data.calibration ?? null);
       // 命中缓存时没有新记录产生，不必刷新准确率面板
       if (!data.cached) onAnalyzed?.();
     } catch (err) {
@@ -132,6 +136,7 @@ export function AnalysisPanel({
                 {analysis.confidence}
               </span>
             </div>
+            <CalibrationNote calibration={calibration} />
           </div>
 
           <Section title="因子拆解">
@@ -212,6 +217,42 @@ export function AnalysisPanel({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 历史校准后的置信度。
+ *
+ * 这里的克制是刻意的：样本不足时**不显示任何数字**，只说还差多少条。
+ * 用 2 条样本算出的「校准后 0%」看起来和用 200 条算出的一样权威，
+ * 而它的用途恰恰是判断「这条结论该信几分」——宁可不说，不能误导。
+ */
+function CalibrationNote({ calibration }: { calibration: Calibration | null }) {
+  if (!calibration) return null;
+
+  if (calibration.status === 'insufficient') {
+    return (
+      <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
+        历史样本不足，暂不校准（已检验 {calibration.evaluated} 条，还需 {calibration.needed} 条）。
+        研判到期后会自动检验，攒够了这里会显示按历史命中率修正过的置信度。
+      </p>
+    );
+  }
+
+  const delta = calibration.calibrated - calibration.stated;
+  // 只有下调才是需要警惕的信号：模型说得比实际准，用的时候要打折
+  const tone = delta <= -5 ? 'text-amber-400' : 'text-zinc-400';
+
+  return (
+    <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
+      <span className={tone}>
+        历史校准后约 {calibration.calibrated}%（±{calibration.uncertainty}）
+      </span>
+      {' · '}
+      基于 {calibration.sampleSize} 条
+      {calibration.scope === 'bucket' ? '同区间' : '全部'}样本
+      {calibration.weak && ' · 样本仍偏少，参考性弱'}
+    </p>
   );
 }
 
