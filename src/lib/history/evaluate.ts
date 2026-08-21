@@ -9,6 +9,7 @@
  */
 
 import { fetchCandles } from '../datasources/binance-vision';
+import { readRecords, updateRecords } from './store';
 import type { AnalysisRecord, AccuracyStats, Evaluation } from './types';
 import { HORIZON_MS } from './types';
 
@@ -102,6 +103,26 @@ export async function evaluatePending(records: AnalysisRecord[]): Promise<Analys
     const evaluation = results.get(r.id);
     return evaluation ? { ...r, evaluation } : r;
   });
+}
+
+/**
+ * 读取存档 → 评估到期记录 → 有变更才写盘。
+ *
+ * 抽成一个函数是因为有两个调用方：打开准确率面板时（`/api/analysis/history`），
+ * 以及常驻 worker 定期调用。两边各写一遍「有没有变化」的判断，
+ * 迟早会漂移成两种行为——而这种漂移的表现是「有时候评估了有时候没有」，
+ * 极难查。
+ *
+ * @returns 本次新产生的评估条数
+ */
+export async function evaluateDueRecords(): Promise<number> {
+  const records = await readRecords();
+  const updated = await evaluatePending(records);
+
+  const changed = updated.filter((r, i) => r.evaluation !== records[i].evaluation).length;
+  // 没有新评估就不写盘，避免每次打开页面都无谓地重写文件
+  if (changed > 0) await updateRecords(() => updated);
+  return changed;
 }
 
 const CONFIDENCE_BUCKETS = [

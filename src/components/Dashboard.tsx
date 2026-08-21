@@ -9,7 +9,7 @@ import { ema, sma, bollinger } from '@/lib/indicators';
 import { formatPercent, formatPrice, trendColor } from '@/lib/format';
 import { Watchlist } from './Watchlist';
 import { SymbolSearch } from './SymbolSearch';
-import { PriceChart } from './PriceChart';
+import { PriceChart, type PriceLine } from './PriceChart';
 import { IndicatorPanel } from './IndicatorPanel';
 import { AnalysisPanel } from './AnalysisPanel';
 import { NewsPanel } from './NewsPanel';
@@ -19,17 +19,46 @@ import { AlertsPanel } from './AlertsPanel';
 import { MacroPanel } from './MacroPanel';
 import { ResonancePanel } from './ResonancePanel';
 import { MicrostructurePanel } from './MicrostructurePanel';
+import { ComparePanel } from './ComparePanel';
 import { AccuracyPanel } from './AccuracyPanel';
 import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
-type PanelTab = 'indicators' | 'analysis' | 'macro' | 'alerts';
+type PanelTab = 'indicators' | 'analysis' | 'compare' | 'macro' | 'alerts';
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: 'indicators', label: '技术面' },
   { id: 'analysis', label: 'AI 研判' },
+  { id: 'compare', label: '对比' },
   { id: 'macro', label: '宏观' },
   { id: 'alerts', label: '告警' },
 ];
+
+interface Levels {
+  supports: number[];
+  resistances: number[];
+  invalidation: number;
+}
+
+/**
+ * 把研判的关键价位翻译成图上的线。
+ *
+ * 失效价用实线且颜色最醒目：支撑阻力是「可能反应的位置」，
+ * 而失效价是「到这里说明整个判断已经不成立」——两者的性质不同，
+ * 画成一样粗细会让最该注意的那条淹没在其余几条里。
+ */
+function toPriceLines(lv: Levels): PriceLine[] {
+  const lines: PriceLine[] = [];
+  lv.supports?.slice(0, 3).forEach((p, i) => {
+    lines.push({ price: p, label: `研判支撑${i + 1}`, color: '#10b981', dashed: true });
+  });
+  lv.resistances?.slice(0, 3).forEach((p, i) => {
+    lines.push({ price: p, label: `研判阻力${i + 1}`, color: '#f43f5e', dashed: true });
+  });
+  if (Number.isFinite(lv.invalidation)) {
+    lines.push({ price: lv.invalidation, label: '失效价', color: '#f59e0b' });
+  }
+  return lines;
+}
 
 interface KlineResponse {
   candles: Candle[];
@@ -40,6 +69,9 @@ export function Dashboard() {
   const { symbols, active } = useWatchlist();
   const [interval, setIntervalState] = useState<Interval>('1h');
   const [showOverlays, setShowOverlays] = useState(true);
+  const [showLevels, setShowLevels] = useState(true);
+  /** 该币最近一次研判给出的关键价位。没有研判过则为空 */
+  const [levels, setLevels] = useState<{ key: string; lines: PriceLine[] }>({ key: '', lines: [] });
   const [tab, setTab] = useState<PanelTab>('indicators');
   /** 研判完成后自增，用于让准确率面板重新拉取（新记录刚落盘） */
   const [analysisVersion, setAnalysisVersion] = useState(0);
@@ -111,6 +143,31 @@ export function Dashboard() {
   }, [data, showOverlays]);
 
   // 告警统一在这里求值，保证一次数据更新只触发一次
+  /**
+   * 取该币最近一次研判的关键价位，画到主图上。
+   *
+   * 走历史接口而不是等用户打开研判面板：价位线的价值在于「一眼看到
+   * 现在离失效价还有多远」，那应该在看 K 线时就成立，
+   * 而不是要先切到另一个标签页。带 evaluate=0 是为了不触发到期评估——
+   * 这里只是读，不该顺带做写操作。
+   */
+  useEffect(() => {
+    if (!active) return;
+    const ac = new AbortController();
+    fetch(`/api/analysis/history?symbol=${active}&evaluate=0`, { signal: ac.signal })
+      .then((r) => r.json())
+      .then((d: { records?: { analysis: { levels: Levels } }[] }) => {
+        const lv = d.records?.[0]?.analysis?.levels;
+        setLevels({ key: active, lines: lv ? toPriceLines(lv) : [] });
+      })
+      .catch(() => {
+        // 中断或失败时不画线即可，没有研判过是常态
+      });
+    return () => ac.abort();
+  }, [active, analysisVersion]);
+
+  const priceLines = showLevels && levels.key === active ? levels.lines : undefined;
+
   // 告警求值已全部移到服务端，这里只订阅结果并对新事件弹桌面通知
   const { events: alertEvents, refresh: refreshAlertEvents } = useAlertEvents();
 
@@ -164,6 +221,24 @@ export function Dashboard() {
               >
                 均线/布林
               </button>
+              <button
+                onClick={() => setShowLevels((v) => !v)}
+                disabled={levels.lines.length === 0}
+                title={
+                  levels.lines.length === 0
+                    ? '该币尚无研判记录'
+                    : '显示最近一次 AI 研判给出的支撑 / 阻力 / 失效价'
+                }
+                className={`text-xs ${
+                  levels.lines.length === 0
+                    ? 'cursor-not-allowed text-zinc-700'
+                    : showLevels
+                      ? 'text-zinc-300 hover:text-zinc-100'
+                      : 'text-zinc-600 hover:text-zinc-100'
+                }`}
+              >
+                研判价位
+              </button>
               <div className="flex gap-0.5 rounded-lg bg-zinc-900 p-0.5">
                 {INTERVALS.map((iv) => (
                   <button
@@ -195,7 +270,9 @@ export function Dashboard() {
                 加载 K 线…
               </div>
             )}
-            {data && <PriceChart candles={data.candles} overlays={overlays} />}
+            {data && (
+              <PriceChart candles={data.candles} overlays={overlays} priceLines={priceLines} />
+            )}
           </div>
 
           <div className="shrink-0 border-t border-zinc-800">
@@ -243,6 +320,7 @@ export function Dashboard() {
                 </div>
               </>
             )}
+            {tab === 'compare' && <ComparePanel />}
             {tab === 'macro' && <MacroPanel />}
             {tab === 'alerts' && (
               <AlertsPanel

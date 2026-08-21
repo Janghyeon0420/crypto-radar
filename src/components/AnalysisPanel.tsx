@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Analysis } from '@/lib/analysis/schema';
 import type { Calibration } from '@/lib/history/calibrate';
 import { formatPrice, timeAgo } from '@/lib/format';
@@ -42,7 +42,17 @@ export function AnalysisPanel({
   /** 用历史命中率校准后的置信度。样本不够时是 insufficient，不出数 */
   const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [loading, setLoading] = useState(false);
+  /** 服务端推来的真实阶段。null 表示未在进行中 */
+  const [progress, setProgress] = useState<{ stage: string; typicalMs: number | null; model?: string } | null>(null);
+  /** 已等待秒数。与阶段一起显示，让「还在动」这件事本身可见 */
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loading) return;
+    const t = setInterval(() => setElapsed((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, [loading]);
 
   /**
    * @param force 跳过缓存强制重新生成。
@@ -52,27 +62,59 @@ export function AnalysisPanel({
   const run = async (force = false) => {
     setLoading(true);
     setError(null);
+    setElapsed(0);
+    setProgress({ stage: 'quote', typicalMs: null });
     try {
       const res = await fetch('/api/analysis', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ symbol, force }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setAnalysis(data.analysis);
-      setGeneratedAt(data.generatedAt);
-      setCache({ cached: Boolean(data.cached), reason: data.cacheReason });
-      setCalibration(data.calibration ?? null);
-      // 命中缓存时没有新记录产生，不必刷新准确率面板
-      if (!data.cached) onAnalyzed?.();
+
+      // 参数校验失败等情况仍返回普通 JSON，不是流
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+
+      // NDJSON：一行一个事件。按行切分，最后一段可能不完整，留到下一轮
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const evt = JSON.parse(line);
+
+          if (evt.stage === 'error') throw new Error(evt.error);
+          if (evt.stage !== 'done') {
+            setProgress({ stage: evt.stage, typicalMs: evt.typicalMs ?? null, model: evt.model });
+            continue;
+          }
+
+          setAnalysis(evt.analysis);
+          setGeneratedAt(evt.generatedAt);
+          setCache({ cached: Boolean(evt.cached), reason: evt.cacheReason });
+          setCalibration(evt.calibration ?? null);
+          // 命中缓存时没有新记录产生，不必刷新准确率面板
+          if (!evt.cached) onAnalyzed?.();
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
-
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
@@ -91,6 +133,8 @@ export function AnalysisPanel({
           {error}
         </p>
       )}
+
+      {loading && progress && <ProgressNote progress={progress} elapsed={elapsed} />}
 
       {!analysis && !error && !loading && (
         <p className="text-xs leading-relaxed text-zinc-500">
@@ -216,6 +260,65 @@ export function AnalysisPanel({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+const STAGE_LABEL: Record<string, string> = {
+  quote: '拉取行情快照，判断能否复用上次结论',
+  klines: '拉取 1h / 4h / 1d 三个周期的 K 线并计算指标',
+  context: '拉取衍生品、市场情绪、资讯与宏观',
+  model: '已提交模型，等待返回',
+};
+
+const STAGE_ORDER = ['quote', 'klines', 'context', 'model'];
+
+/**
+ * 研判进度。
+ *
+ * 阶段全部来自服务端真实推送，不是按时间猜的——猜出来的进度条
+ * 在慢的时候会停在 90% 不动，那比一个转圈更让人不安。
+ *
+ * 「上次用了多久」比「通常 23-95 秒」有用得多：后者的范围宽到
+ * 等于没说，而前者是这台机器、这个供应商的真实数据。
+ */
+function ProgressNote({
+  progress,
+  elapsed,
+}: {
+  progress: { stage: string; typicalMs: number | null; model?: string };
+  elapsed: number;
+}) {
+  const idx = STAGE_ORDER.indexOf(progress.stage);
+  const typical = progress.typicalMs ? Math.round(progress.typicalMs / 1000) : null;
+
+  return (
+    <div className="rounded-lg bg-zinc-900/60 px-3 py-2.5">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs text-zinc-300">
+          {STAGE_LABEL[progress.stage] ?? '处理中'}
+        </span>
+        <span className="font-mono text-xs text-zinc-500 tabular-nums">{elapsed}s</span>
+      </div>
+
+      {/* 四个阶段的进度点。模型那一步占了绝大部分时间，
+          所以点亮到第四个不等于快好了——文案里说明这一点 */}
+      <div className="mt-2 flex gap-1">
+        {STAGE_ORDER.map((st, i) => (
+          <div
+            key={st}
+            className={`h-1 flex-1 rounded-full ${i <= idx ? 'bg-zinc-400' : 'bg-zinc-800'}`}
+          />
+        ))}
+      </div>
+
+      <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+        {progress.stage === 'model'
+          ? typical
+            ? `模型推理占了绝大部分时间。最近几次约 ${typical} 秒。`
+            : '模型推理占了绝大部分时间，实测 23-95 秒不等。'
+          : '前三步都是取数与计算，通常几秒内完成。'}
+      </p>
     </div>
   );
 }

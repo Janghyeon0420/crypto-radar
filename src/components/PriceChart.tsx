@@ -5,8 +5,10 @@ import {
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
+  LineStyle,
   createChart,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
@@ -19,19 +21,31 @@ import type { Candle } from '@/lib/datasources/types';
  * 金融图表对十字光标、对数坐标、大数据量下的平移缩放性能有特殊要求，
  * 通用库画出来能看但不好用。
  */
+/** 画在主图上的水平价位线，如研判给出的支撑 / 阻力 / 失效价 */
+export interface PriceLine {
+  price: number;
+  label: string;
+  color: string;
+  /** 虚线用于「预期中的价位」，实线用于「已经确认的价位」 */
+  dashed?: boolean;
+}
+
 export function PriceChart({
   candles,
   overlays,
+  priceLines,
 }: {
   candles: Candle[];
   /** 叠加在主图上的线，如均线、布林带 */
   overlays?: { label: string; color: string; data: (number | null)[] }[];
+  priceLines?: PriceLine[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const overlayRefs = useRef<ISeriesApi<'Line'>[]>([]);
+  const priceLineRefs = useRef<IPriceLine[]>([]);
 
   // 建图只做一次，数据更新走 setData，避免每次刷新都重建 canvas
   useEffect(() => {
@@ -127,6 +141,41 @@ export function PriceChart({
       overlayRefs.current.push(series);
     }
   }, [overlays, candles]);
+
+  /**
+   * 水平价位线。
+   *
+   * 与 overlays 分开处理：overlays 是「每根 K 线一个值」的序列（均线、布林带），
+   * 价位线是「一个固定价格」（支撑、阻力、失效价）。用序列去画一条水平线
+   * 也能实现，但那样它会随时间轴平移而被裁切，而价位线应该始终横贯全图。
+   */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of priceLineRefs.current) {
+      try {
+        series.removePriceLine(line);
+      } catch {
+        // 图表已被销毁时忽略
+      }
+    }
+    priceLineRefs.current = [];
+
+    for (const l of priceLines ?? []) {
+      if (!Number.isFinite(l.price)) continue;
+      priceLineRefs.current.push(
+        series.createPriceLine({
+          price: l.price,
+          color: l.color,
+          lineWidth: 1,
+          lineStyle: l.dashed ? LineStyle.Dashed : LineStyle.Solid,
+          axisLabelVisible: true,
+          title: l.label,
+        }),
+      );
+    }
+  }, [priceLines]);
 
   return <div ref={containerRef} className="h-full w-full" />;
 }

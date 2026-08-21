@@ -13,6 +13,7 @@
     "backtest:resonance": "tsx scripts/backtest-resonance.mjs",
     "backtest:flow": "tsx scripts/backtest-flow.mjs",
     "backtest:hawkdove": "tsx --env-file=.env.local scripts/backtest-hawkdove.mjs",
+    "backup": "tsx scripts/backup-data.mjs",
     "netcheck": "node scripts/check-network.mjs",
     "netcheck:proxy": "NODE_USE_ENV_PROXY=1 node scripts/check-network.mjs"
   },

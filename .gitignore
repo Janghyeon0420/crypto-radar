@@ -42,7 +42,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# 研判历史（本地数据，不入库）
+# 研判历史与备份快照（本地数据，不入库）
 /data
 
 # 常驻服务日志

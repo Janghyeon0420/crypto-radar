@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { readRecords, updateRecords } from '@/lib/history/store';
-import { computeStats, evaluatePending } from '@/lib/history/evaluate';
+import { readRecords } from '@/lib/history/store';
+import { computeStats, evaluateDueRecords } from '@/lib/history/evaluate';
 
 /** 拉取历史与准确率统计。顺带把到期未评估的记录评估掉。 */
 export const maxDuration = 60;
@@ -11,19 +11,18 @@ export async function GET(req: Request) {
   // 默认顺手评估到期记录，让准确率随打开页面自动累积，无需手动触发
   const skipEval = searchParams.get('evaluate') === '0';
 
-  let records = await readRecords();
-
   if (!skipEval) {
     try {
-      const updated = await evaluatePending(records);
-      // 只有确实产生了新评估才写盘，避免每次打开都无谓地重写文件
-      if (updated.some((r, i) => r.evaluation !== records[i].evaluation)) {
-        records = await updateRecords(() => updated);
-      }
+      // 常驻 worker 也会定期做这件事（见 alerts/worker.ts）。
+      // 这里保留是因为：手动 npm run dev 时没有常驻进程，
+      // 而打开面板的人正期待看到最新结果
+      await evaluateDueRecords();
     } catch (err) {
       console.warn('[history] 评估失败：', err);
     }
   }
+
+  const records = await readRecords();
 
   const scoped = symbol ? records.filter((r) => r.symbol === symbol) : records;
 

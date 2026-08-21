@@ -12,7 +12,9 @@ import { fetchCandles, fetchTickers } from '../datasources/binance-vision';
 import { buildTechnicalSnapshot, type TechnicalSnapshot } from '../indicators/summary';
 import { evaluateRules } from './engine';
 import { appendEvents, readRules, updateRules } from './store';
-import { dispatchEvents, resolveNotifiers } from './notify';
+import { dispatchEvents, dispatchText, resolveNotifiers } from './notify';
+import { evaluateDueRecords } from '../history/evaluate';
+import { backupDataFiles } from '../history/backup';
 import { acquireLock, refreshLock, releaseLock } from './lock';
 import type { AlertEvent, AlertRule } from './types';
 import { INTERVALS, type Interval } from '../datasources/types';
@@ -46,6 +48,13 @@ interface WorkerGlobal {
   state: WorkerStatus;
   timer: NodeJS.Timeout | null;
   previousSnapshots: Map<string, TechnicalSnapshot>;
+  /** 上次跑到期评估 / 上次备份的时间，用于把低频任务错开在高频轮询里 */
+  lastEvalAt: number;
+  lastBackupAt: number;
+  /** 连续失败轮数，用于自监控告警 */
+  consecutiveFailures: number;
+  /** 是否已就本次故障发过通知，避免每轮都发 */
+  outageNotified: boolean;
 }
 
 const g = globalThis as unknown as Record<symbol, WorkerGlobal | undefined>;
@@ -65,6 +74,10 @@ if (!g[GLOBAL_KEY]) {
     },
     timer: null,
     previousSnapshots: new Map(),
+    lastEvalAt: 0,
+    lastBackupAt: 0,
+    consecutiveFailures: 0,
+    outageNotified: false,
   };
 }
 
@@ -119,6 +132,14 @@ export function startWorker(): void {
         `，通知出口：${state.notifiers.join('、') || '仅记录（未配置通知通道）'}`,
     );
 
+    // 启动通知有两个作用：确认通道确实通（配错了当场就知道，
+    // 而不是等到第一次真实触发时才发现），以及常驻服务意外重启时留下痕迹
+    if (state.notifiers.length > 0) {
+      void dispatchText(
+        `🟢 Crypto Radar 告警监控已启动，每 ${state.pollSeconds} 秒一轮`,
+      ).catch(() => {});
+    }
+
     // 立即跑一轮，不必等第一个周期
     void tick();
     shared.timer = setInterval(() => void tick(), state.pollSeconds * 1000);
@@ -143,26 +164,107 @@ async function tick(): Promise<void> {
     state.lastRunAt = Date.now();
     state.totalRuns++;
 
-    // 没有启用中的规则时直接返回，一次网络请求都不发
+    // 没有启用中的规则时不做行情请求。但低频维护任务照做——
+    // 「没建告警规则」和「不需要评估研判、不需要备份」是两回事
     if (rules.length === 0) {
       state.lastEventCount = 0;
       state.lastError = null;
+      await runMaintenance();
       return;
     }
 
     const events = await evaluateAll(rules);
     state.lastEventCount = events.length;
     state.lastError = null;
+    await noteSuccess();
 
     if (events.length > 0) await handleEvents(events);
   } catch (err) {
     state.lastError = err instanceof Error ? err.message : String(err);
     console.warn('[alerts] 本轮求值失败：', state.lastError);
+    await noteFailure(state.lastError);
   } finally {
     // 续期放在 finally：求值失败（比如网络断了）不代表进程死了，
     // 不续期会让锁过期、被另一个进程接管，反而造成两边都在跑
     await refreshLock();
+    await runMaintenance();
   }
+}
+
+/** 到期评估的间隔。研判的检验周期以天计，比这更频繁没有意义 */
+const EVAL_INTERVAL_MS = 15 * 60_000;
+const BACKUP_INTERVAL_MS = 24 * 3600_000;
+
+/**
+ * 低频维护任务：研判到期评估 + data/ 每日快照。
+ *
+ * 挂在告警轮询里，是因为常驻进程已经在跑了，再起一套调度纯属多余。
+ * 每项任务自己记上次执行时间，与轮询间隔解耦——
+ * 用户把 ALERTS_POLL_SECONDS 调成 20 秒，也不会因此每 20 秒评估一次。
+ *
+ * 任何一项失败都只记日志：维护任务不该拖垮告警这个主职能。
+ */
+async function runMaintenance(): Promise<void> {
+  const now = Date.now();
+
+  // ── 研判到期评估 ──
+  // 这件事此前只在有人打开准确率面板时才发生，也就是说
+  // 不打开看板研判就永远不会被检验，而置信度校准要攒够样本才出数。
+  // 常驻进程本来就在跑，这是它天然该做的事
+  if (now - shared.lastEvalAt >= EVAL_INTERVAL_MS) {
+    shared.lastEvalAt = now;
+    try {
+      const n = await evaluateDueRecords();
+      if (n > 0) console.log(`[history] 自动评估了 ${n} 条到期研判`);
+    } catch (err) {
+      console.warn('[history] 自动评估失败：', err);
+    }
+  }
+
+  // ── data/ 每日快照 ──
+  if (now - shared.lastBackupAt >= BACKUP_INTERVAL_MS) {
+    shared.lastBackupAt = now;
+    try {
+      const r = await backupDataFiles();
+      if (r) console.log(`[backup] 已快照 ${r.files.length} 个文件到 ${r.dir}`);
+    } catch (err) {
+      console.warn('[backup] 快照失败：', err);
+    }
+  }
+}
+
+/**
+ * 自监控：连续失败到一定轮数就主动发通知。
+ *
+ * 告警的全部意义是「你不用盯着」。那么当告警本身停摆时，
+ * 更不该指望用户主动打开页面去发现——必须让它自己喊一声。
+ *
+ * 只在跨过阈值的那一轮发一次，恢复时再发一次。
+ * 每轮都发会在网络断开的整个期间刷屏，那和不发一样糟。
+ */
+const FAILURE_THRESHOLD = 3;
+
+async function noteFailure(detail: string): Promise<void> {
+  shared.consecutiveFailures++;
+  if (shared.consecutiveFailures < FAILURE_THRESHOLD || shared.outageNotified) return;
+
+  shared.outageNotified = true;
+  await dispatchText(
+    `⚠️ 告警轮询连续 ${shared.consecutiveFailures} 轮失败，监控可能已中断。
+` +
+      `最近一次错误：${detail}`,
+  ).catch(() => {
+    // 通知本身也发不出去时无处可诉，日志已经记过了
+  });
+}
+
+async function noteSuccess(): Promise<void> {
+  const failed = shared.consecutiveFailures;
+  shared.consecutiveFailures = 0;
+  if (!shared.outageNotified) return;
+
+  shared.outageNotified = false;
+  await dispatchText(`✅ 告警轮询已恢复（此前连续失败 ${failed} 轮）`).catch(() => {});
 }
 
 async function evaluateAll(rules: AlertRule[]): Promise<AlertEvent[]> {

@@ -29,6 +29,12 @@ export interface AnalysisRecord {
   atrPercentAtAnalysis: number;
   analysis: Analysis;
   evaluation: Evaluation | null;
+  /**
+   * 本次研判实际耗时（毫秒）。
+   * 用途是给下一次研判一个**有依据的等待预期**——
+   * 「通常 23-95 秒」这种范围太宽，等于没说；「上次用了 47 秒」才有用。
+   */
+  durationMs?: number;
 }
 
 export interface Evaluation {
