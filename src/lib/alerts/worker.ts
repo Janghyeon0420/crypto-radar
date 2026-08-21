@@ -13,6 +13,7 @@ import { buildTechnicalSnapshot, type TechnicalSnapshot } from '../indicators/su
 import { evaluateRules } from './engine';
 import { appendEvents, readRules, updateRules } from './store';
 import { dispatchEvents, resolveNotifiers } from './notify';
+import { acquireLock, refreshLock, releaseLock } from './lock';
 import type { AlertEvent, AlertRule } from './types';
 import { INTERVALS, type Interval } from '../datasources/types';
 
@@ -96,19 +97,34 @@ export function startWorker(): void {
   state.pollSeconds = Number.isFinite(seconds) && seconds >= 20 ? seconds : 60;
 
   state.notifiers = resolveNotifiers().map((n) => n.label);
-  state.running = true;
-  state.reason = null;
 
-  console.log(
-    `[alerts] 告警轮询已启动，每 ${state.pollSeconds} 秒一轮` +
-      `，通知出口：${state.notifiers.join('、') || '仅记录（未配置通知通道）'}`,
-  );
+  // 取锁失败说明同一份 data/ 已有另一个进程在轮询——最常见的情形是
+  // 常驻服务在跑着，又手动敲了一次 npm run dev（Next 会自动换到 3001）。
+  // 此时必须让出：两个进程同时求值会重复通知、交替覆盖事件文件。
+  void acquireLock(state.pollSeconds).then((lock) => {
+    if (!lock.acquired) {
+      state.running = false;
+      state.reason =
+        `另一个进程（pid ${lock.heldBy?.pid}）正在轮询同一份 data/，本进程不重复求值。` +
+        `若那个进程已经不在了，删掉 data/alerts.lock 即可`;
+      console.warn(`[alerts] ${state.reason}`);
+      return;
+    }
 
-  // 立即跑一轮，不必等第一个周期
-  void tick();
-  shared.timer = setInterval(() => void tick(), state.pollSeconds * 1000);
-  // 不要因为这个定时器而阻止进程退出
-  shared.timer.unref?.();
+    state.running = true;
+    state.reason = null;
+
+    console.log(
+      `[alerts] 告警轮询已启动，每 ${state.pollSeconds} 秒一轮` +
+        `，通知出口：${state.notifiers.join('、') || '仅记录（未配置通知通道）'}`,
+    );
+
+    // 立即跑一轮，不必等第一个周期
+    void tick();
+    shared.timer = setInterval(() => void tick(), state.pollSeconds * 1000);
+    // 不要因为这个定时器而阻止进程退出
+    shared.timer.unref?.();
+  });
 }
 
 export function stopWorker(): void {
@@ -116,6 +132,7 @@ export function stopWorker(): void {
   shared.timer = null;
   state.running = false;
   state.reason = '已手动停止';
+  void releaseLock();
 }
 
 /** 单轮求值。任何异常都不允许中断循环。 */
@@ -141,6 +158,10 @@ async function tick(): Promise<void> {
   } catch (err) {
     state.lastError = err instanceof Error ? err.message : String(err);
     console.warn('[alerts] 本轮求值失败：', state.lastError);
+  } finally {
+    // 续期放在 finally：求值失败（比如网络断了）不代表进程死了，
+    // 不续期会让锁过期、被另一个进程接管，反而造成两边都在跑
+    await refreshLock();
   }
 }
 
