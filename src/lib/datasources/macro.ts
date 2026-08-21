@@ -1,20 +1,33 @@
 /**
- * 美联储数据源。
+ * 宏观数据源（美联储）。
  *
  * 为什么一个加密看板要接美联储：加密资产的中长期走势主要由流动性驱动，
- * 而流动性的总闸门是联邦基金利率。技术指标能解释"这几根 K 线在做什么"，
- * 解释不了"为什么整个市场同时转向"——议息决议、点阵图、官员讲话才能。
- * 这一层是给单币种技术面提供背景的，不是用来直接择时的。
+ * 而流动性的总闸门在美联储。技术指标能解释「这几根 K 线在做什么」，
+ * 解释不了「为什么整个市场同时转向」——议息决议、资产负债表、官员讲话才能。
  *
- * 三个源全部免费无 Key，且实测从中国大陆直连可达（federalreserve.gov 与
- * markets.newyorkfed.org 都不在受限名单上），不需要代理：
- *   - RSS：货币政策新闻稿 / 官员讲话 / 国会证词
- *   - 纽约联储利率接口：EFFR 与当前目标区间
- *   - FOMC 会议日历：下次议息时点
+ * 这一层由四类数据组成，各自解决一个不同的问题：
+ *
+ *   FRED 数值序列    现在的货币环境是松还是紧（净流动性、利率、通胀）
+ *   FOMC 日历        下一个决策时点在什么时候
+ *   官方声明原文      美联储自己怎么说的 → 鹰鸽判断（lib/macro/hawkdove.ts）
+ *   资讯（RSS+Finlight） 市场在关注什么
+ *
+ * 全部免费。FRED 与 Finlight 需要免费 key，其余无需任何凭据。
+ * 实测均可从中国大陆直连（见 docs/DATA-SOURCES.md）。
  */
 
 import { fetchJson, fetchText } from './http';
 import { parseRss } from './rss';
+import { fetchFinlight, isFinlightConfigured, QUERIES } from './finlight';
+import {
+  fetchNetLiquidity,
+  fetchReleaseCalendar,
+  fetchSeriesSet,
+  isFredConfigured,
+  type SeriesId,
+} from './fred';
+import { fetchFedDocument, statementUrlFor } from './fed-text';
+import { analyzeHawkDove } from '../macro/hawkdove';
 import type { FomcMeeting, MacroSnapshot, NewsItem, PolicyRate } from './types';
 
 interface FedFeed {
@@ -215,20 +228,77 @@ export async function fetchNextFomcMeeting(): Promise<FomcMeeting | null> {
   return upcoming[0] ?? null;
 }
 
+/** 面板上展示的序列。挑选标准是「对加密的传导路径清楚」 */
+const PANEL_SERIES: SeriesId[] = ['DFF', 'DGS10', 'T10Y2Y', 'CPIAUCSL', 'UNRATE', 'DTWEXBGS'];
+
 /**
- * 宏观快照。三个源相互独立，任一失败不影响其它两个——
- * 利率接口挂了不该连带让美联储资讯也消失。
+ * 最近一次 FOMC 声明及其鹰鸽判断。
+ *
+ * 声明地址由会期最后一天推出（monetary{YYYYMMDD}a.htm）。
+ * 抓到的内容若不含决议句式，说明地址规律不适用于这一场——
+ * 此时返回 null，而不是拿一份不知道是什么的文本去打分。
+ */
+export async function fetchLatestStatement(): Promise<MacroSnapshot['statement']> {
+  const html = await fetchText(FOMC_CALENDAR_URL, { timeoutMs: 10_000, ttlMs: 12 * 3600_000 });
+  const now = Date.now();
+  const past = parseFomcCalendar(html, 0)
+    .filter((m) => m.decisionAt < now)
+    .sort((a, b) => b.decisionAt - a.decisionAt);
+
+  for (const meeting of past.slice(0, 3)) {
+    const url = statementUrlFor(new Date(meeting.decisionAt));
+    try {
+      const text = await fetchFedDocument(url);
+      if (!/target range for the federal funds rate/i.test(text)) continue;
+      return {
+        title: `FOMC 声明 · ${meeting.label}`,
+        url,
+        publishedAt: meeting.decisionAt,
+        analysis: analyzeHawkDove(text),
+      };
+    } catch {
+      // 这一场抓不到就试上一场，最多回溯三场
+    }
+  }
+  return null;
+}
+
+/**
+ * 宏观快照。
+ *
+ * 每一路都独立 settle：FRED 挂了不该连带让美联储资讯也消失，
+ * 没配 Finlight key 也不该影响其余部分。降级的结果是少一块内容，
+ * 而不是整个面板空白——受限网络下这一点尤其重要。
  */
 export async function fetchMacroSnapshot(): Promise<MacroSnapshot> {
-  const [rate, meeting, news] = await Promise.allSettled([
-    fetchPolicyRate(),
-    fetchNextFomcMeeting(),
-    fetchFedNews(12),
-  ]);
+  const [rate, meeting, fedNews, series, liquidity, releases, statement, finlightNews] =
+    await Promise.allSettled([
+      fetchPolicyRate(),
+      fetchNextFomcMeeting(),
+      fetchFedNews(8),
+      isFredConfigured() ? fetchSeriesSet(PANEL_SERIES) : Promise.resolve([]),
+      isFredConfigured() ? fetchNetLiquidity() : Promise.resolve(null),
+      isFredConfigured() ? fetchReleaseCalendar() : Promise.resolve([]),
+      fetchLatestStatement(),
+      isFinlightConfigured() ? fetchFinlight(QUERIES.macro) : Promise.resolve([]),
+    ]);
+
+  const ok = <T>(r: PromiseSettledResult<T>, fallback: T): T =>
+    r.status === 'fulfilled' ? r.value : fallback;
+
+  // 官方发布排在前面，再按时间倒序补上 Finlight 的宏观报道——
+  // 官方原文是判断依据，媒体报道是背景，两者不该按同一个时间轴混排
+  const official = ok(fedNews, [] as NewsItem[]);
+  const market = ok(finlightNews, [] as NewsItem[]);
+  const seen = new Set(official.map((n) => n.url));
 
   return {
-    policyRate: rate.status === 'fulfilled' ? rate.value : null,
-    nextMeeting: meeting.status === 'fulfilled' ? meeting.value : null,
-    news: news.status === 'fulfilled' ? news.value : [],
+    policyRate: ok(rate, null),
+    nextMeeting: ok(meeting, null),
+    news: [...official, ...market.filter((n) => !seen.has(n.url))].slice(0, 20),
+    series: ok(series, []),
+    netLiquidity: ok(liquidity, null),
+    releases: ok(releases, []),
+    statement: ok(statement, null),
   };
 }

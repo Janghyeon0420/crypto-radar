@@ -48,8 +48,14 @@ export const SYSTEM_PROMPT = `你是一位加密货币市场分析师，服务�
 7. factors 中的 note 必须引用具体数值（如"RSI 72.3 已入超买区"），不要只说"技术面偏强"。
 8. 宏观（美联储）数据是**背景**，不是择时信号。除非临近议息或刚出决议/讲话，
    否则它对日内、数日尺度的权重应该很低。不要用"美联储维持利率不变"
-   去解释一根 15 分钟 K 线。真正值得提高其权重的情形只有两类：
-   议息在即（此时波动率通常被压制、决议后放大），或政策口径刚发生变化。
+   去解释一根 15 分钟 K 线。真正值得提高其权重的情形有三类：
+   议息在即（此时波动率通常被压制、决议后放大）、政策口径刚发生变化、
+   或临近 CPI / 非农这类会引发跨资产重定价的数据发布。
+9. 鹰鸽分附有逐条依据（命中哪句话、加减多少分）。你可以不同意它，
+   但要针对**具体某一条依据**说明分歧，不要凭印象重新感受一遍——
+   那等于用一个不可复核的判断替换掉一个可复核的判断。
+10. 净流动性反映市场上实际可用的钱，它与价格的关系是中长期的。
+   用它解释日内波动几乎总是错的。
 
 你的输出是分析，不是投资建议。不要写"建议买入/卖出"这类操作指令，
 而是描述市场状态、可能的演化路径和各自的触发条件。`;
@@ -140,14 +146,16 @@ export function buildUserPrompt(input: AnalysisInput): string {
 /**
  * 宏观段落。
  *
- * 刻意把"距下次议息还有几天"算好再喂进去，而不是给个日期让模型自己减——
- * 模型对"今天是哪天"没有可靠概念，让它算天数几乎必错，
- * 而这个天数恰恰是宏观维度里最影响判断的一个数字。
+ * 三件事刻意由代码算好再喂进去，而不是让模型自己推：
+ *
+ *   1. **距下次议息几天**——模型对「今天是哪天」没有可靠概念，让它减日期几乎必错，
+ *      而这个天数恰恰是宏观维度里最影响判断的数字。
+ *   2. **净流动性**——需要三个不同频率、不同单位的序列相减，算错不会报错。
+ *   3. **鹰鸽分及其证据**——基于官方原文的确定性打分。给模型的是「哪句话、加减多少分」，
+ *      它可以不同意，但必须针对具体证据说，而不是凭印象重新感受一遍。
  */
 function renderMacro(macro: AnalysisInput['macro']): string {
-  if (!macro || (!macro.policyRate && !macro.nextMeeting && macro.news.length === 0)) {
-    return '\n## 宏观政策（美联储）\n无数据';
-  }
+  if (!macro) return '\n## 宏观政策（美联储）\n无数据';
 
   const lines = ['\n## 宏观政策（美联储）'];
 
@@ -166,15 +174,75 @@ function renderMacro(macro: AnalysisInput['macro']): string {
     );
   }
 
+  if (macro.statement) {
+    const a = macro.statement.analysis;
+    lines.push(`\n### 最近一次 FOMC 声明的措辞分析（基于官方原文）
+倾向：${zhStance(a.stance)}（${a.score > 0 ? '+' : ''}${a.score}，+100 极鹰 / -100 极鸽）
+本次动作：${a.action === 'raise' ? '加息' : a.action === 'lower' ? '降息' : a.action === 'maintain' ? '维持不变' : '未识别'}${
+      a.dissent
+        ? `　投票分歧：${a.dissent.against} 票反对，主张${a.dissent.direction === 'hawkish' ? '更紧' : '更松'}`
+        : '　无异议票'
+    }
+逐条依据：
+${a.evidence
+  .slice(0, 8)
+  .map((e) => `  ${e.weight > 0 ? '+' : ''}${e.weight}　${e.phrase}${e.note ? `（${e.note}）` : ''}`)
+  .join('\n')}
+  —— 这是**词典打分**，不是对政策的预测。回测显示鹰派声明之后从未降息、
+     鸽派之后从未加息（41 次会议），但样本稀少且政策周期高度自相关。
+     若你对措辞的解读与它不同，请针对上面某一条具体依据说明。`);
+  }
+
+  if (macro.netLiquidity) {
+    const n = macro.netLiquidity;
+    lines.push(`\n### 流动性
+净流动性：${n.value.toFixed(0)} 十亿美元${
+      n.changePercent !== null
+        ? `，近一月${n.changePercent >= 0 ? '增加' : '减少'} ${Math.abs(n.changePercent).toFixed(2)}%`
+        : ''
+    }
+  = 美联储总资产 ${n.components.walcl.toFixed(0)} − 逆回购 ${n.components.reverseRepo.toFixed(0)} − 财政部账户 ${n.components.tga.toFixed(0)}
+  —— 这度量的是市场上实际可用的钱，对加密比利率水平本身更直接。
+     三项频率不同（周/日/周），观测日期未必对齐。`);
+  }
+
+  if (macro.series.length) {
+    lines.push(
+      '\n### 关键宏观数值\n' +
+        macro.series
+          .map((x) => {
+            const delta = x.previous ? `（上期 ${x.previous.value.toFixed(2)}）` : '';
+            return `- ${x.label}：${x.latest.value.toFixed(2)}${unitOf(x.unit)} ${delta} @${x.latest.date}`;
+          })
+          .join('\n'),
+    );
+  }
+
+  if (macro.releases.length) {
+    lines.push(
+      '\n### 未来数据发布（这些时点前后行情性质与平时不同）\n' +
+        macro.releases
+          .slice(0, 5)
+          .map((r) => `- ${r.date}（${r.daysAway} 天后）${r.name}`)
+          .join('\n'),
+    );
+  }
+
   if (macro.news.length) {
-    lines.push('美联储近期发布：');
-    macro.news.slice(0, 6).forEach((n) => {
-      lines.push(`- [${new Date(n.publishedAt).toISOString().slice(0, 10)}] (${n.source}) ${n.title}`);
-    });
+    lines.push(
+      '\n### 宏观资讯\n' +
+        macro.news
+          .slice(0, 8)
+          .map((n) => `- [${new Date(n.publishedAt).toISOString().slice(0, 10)}] (${n.source}) ${n.title}`)
+          .join('\n'),
+    );
   }
 
   return lines.join('\n');
 }
+
+const zhStance = (s: string) => ({ hawkish: '偏鹰', dovish: '偏鸽', neutral: '中性' })[s] ?? s;
+const unitOf = (u: string) => (u === 'percent' ? '%' : u === 'billionsUSD' ? ' 十亿美元' : '');
 
 const zh = (b: string) => ({ bullish: '多头', bearish: '空头', neutral: '中性' })[b] ?? b;
 

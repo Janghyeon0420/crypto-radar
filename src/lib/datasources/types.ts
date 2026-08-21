@@ -75,6 +75,8 @@ export interface NewsItem {
    * 混排的结果是宏观信息永远被挤到列表末尾，等于没接。
    */
   category: 'crypto' | 'macro';
+  /** 来源方给的分类标签（Finlight 提供，RSS 源没有） */
+  tags?: string[];
 }
 
 /**
@@ -113,8 +115,24 @@ export interface MacroSnapshot {
   policyRate: PolicyRate | null;
   /** 下一次议息会议，日历拉取失败或年内已开完时为 null */
   nextMeeting: FomcMeeting | null;
-  /** 美联储官方资讯（货币政策新闻稿、官员讲话、国会证词） */
+  /** 美联储官方资讯（货币政策新闻稿、官员讲话、国会证词）+ Finlight 宏观资讯 */
   news: NewsItem[];
+  /** FRED 宏观数值序列 */
+  series: import('./fred').MacroSeries[];
+  /**
+   * 净流动性 = 美联储总资产 − 逆回购 − 财政部账户。
+   * 对加密而言这比利率水平本身更直接：它度量的是市场上实际有多少钱。
+   */
+  netLiquidity: import('./fred').NetLiquidity | null;
+  /** 未来数周的重要数据发布，这些日子的行情性质与平时不同 */
+  releases: import('./fred').ReleaseEvent[];
+  /** 最近一次 FOMC 声明的鹰鸽判断，基于官方原文 */
+  statement: {
+    title: string;
+    url: string;
+    publishedAt: number;
+    analysis: import('../macro/hawkdove').HawkDoveResult;
+  } | null;
 }
 
 /** 数据源健康状态，用于前端显示"哪个源挂了" */

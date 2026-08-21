@@ -61,7 +61,10 @@ src/
     │   ├── sentiment.ts       情绪
     │   ├── rss.ts             极简 RSS 解析（news 与 macro 共用）
     │   ├── news.ts            加密行业资讯
-    │   └── macro.ts           美联储：RSS + EFFR 接口 + FOMC 日历
+    │   ├── finlight.ts        金融资讯 API（广度覆盖，需免费 key）
+    │   ├── fred.ts            FRED/ALFRED 宏观数值、净流动性、发布日历
+    │   ├── fed-text.ts        美联储官方文档正文抓取
+    │   └── macro.ts           把以上组合成宏观快照
     ├── indicators/
     │   ├── index.ts           MA / EMA / RSI / MACD / BOLL / ATR / KDJ / VWAP / 支撑阻力
     │   ├── summary.ts         压缩成「当前技术面快照」+ 透明的打分理由
@@ -91,6 +94,8 @@ src/
     │   ├── cache.ts           研判结果复用判定（省钱，见决策 8）
     │   ├── calibrate.ts       用历史命中率校准模型自称的置信度
     │   └── evaluate.ts        到期评估、置信度校准、无脑基线对比
+    ├── macro/
+    │   └── hawkdove.ts        鹰鸽判断：词典 + 投票分歧 + 对加密的传导
     ├── stores/watchlist.ts    自选（localStorage）
     ├── ws/binance-stream.ts   WebSocket（自动重连）
     └── hooks/
@@ -256,6 +261,19 @@ Schema 里刻意包含 `dataGaps`（数据缺口）和 `risks`（风险）两个
 是网络、上游还是代码的问题。同一接口还会探测**服务端出口 IP 与国家**——
 Node 的 fetch 默认不读 `HTTP_PROXY`，服务端很可能在用户毫不知情的情况下绕过 VPN 直连。
 
+### 12. 数据源分层：每类判断只认一个来源
+
+详见 `docs/DATA-FRAMEWORK.md`。要点：
+
+- **行情**走 Binance 公开镜像。主站与合约 WS 实测均不可达，衍生品因此留在 OKX——
+  这不是偏好，是 `fstream.binance.com` 连不上。
+- **数值**走 FRED。净流动性（总资产 − 逆回购 − 财政部账户）比利率水平更贴近加密，
+  但三个序列单位与频率都不同，相减前必须归一化——错了不会报错，只会给出错数字。
+- **政策态度**只认官方原文。转述会加入解读，而市场逐字读的是原文。
+  鹰鸽用词典打分而非 LLM：确定性、免费、可回测，且必然带逐条证据。
+- **资讯广度**用 Finlight，但它的免费档不返回实体与情绪，所以它只提供覆盖面，
+  不参与判断。
+
 ## 测试
 
 ```bash
@@ -279,6 +297,7 @@ npm run test:live # 额外跑依赖真实网络的（拉美联储页面校验 HT
 | `test-alert-lock.mjs` | 单实例锁的 17 个分支 | 锁太严则告警彻底停摆且无提示，太松则通知发两遍 |
 | `test-calibration.mjs` | 置信度校准的 29 个分支 | 算错只会安静地给出一个看起来很权威的错数字 |
 | `test-resonance.mjs` | 共振与回测统计的 38 个分支 | 开发中真的踩过：打分卡口径写错，差点据此改错权重 |
+| `test-hawkdove.mjs` | 鹰鸽判断的 31 个分支 | 两个真实 bug：异议句污染词典、中间名缩写截断名单 |
 | `test-cache.mjs` | 研判复用判定的 14 个边界 | 判错的后果是多花钱或用过期结论，两边都不会报错 |
 | `test-webhook-sign.mjs` | 三家群机器人的加签与载荷 | 签名写错是静默失败：HTTP 200 但消息不出现 |
 | `test-fomc-parse.live.mjs` | FOMC 日历 HTML 解析 | 页面改版后解析返回空，界面只会显示"暂无"，不会报错 |

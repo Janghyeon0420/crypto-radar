@@ -11,6 +11,7 @@
     "test:live": "node scripts/test.mjs --live",
     "backtest": "tsx scripts/backtest-weights.mjs",
     "backtest:resonance": "tsx scripts/backtest-resonance.mjs",
+    "backtest:hawkdove": "tsx --env-file=.env.local scripts/backtest-hawkdove.mjs",
     "netcheck": "node scripts/check-network.mjs",
     "netcheck:proxy": "NODE_USE_ENV_PROXY=1 node scripts/check-network.mjs"
   },
