@@ -143,10 +143,10 @@ export function buildTechnicalSnapshot(
   const rsiState =
     rsi14 >= 70 ? 'overbought' : rsi14 <= 30 ? 'oversold' : ('normal' as const);
 
+  // ma20 / ma50 不必传：它们的信息已经被 alignment 概括，
+  // 多传两个未被使用的字段只会让 SignalInput 的契约含糊
   const { bias, reasons } = scoreBias({
     price,
-    ma20,
-    ma50,
     ma200,
     alignment,
     rsi14,
@@ -182,13 +182,70 @@ export function buildTechnicalSnapshot(
 }
 
 /**
- * 简单加权打分。刻意保持透明和可解释——每条理由都能对应到一个具体指标状态，
- * 这样 LLM 拿到的是"有依据的倾向"而不是黑箱分数，用户也能自己判断这套逻辑合不合理。
+ * 规则引擎的信号定义与权重。
+ *
+ * 每个信号只回答一件事：**此刻它指向多还是空**。
+ * 检测与加权刻意分开——不分开就没法单独衡量一个信号值多少钱：
+ * 回测需要知道「均线多头排列出现时，后面涨的概率是多少」，
+ * 这个问题与「它该占几分」是两件事。
  */
-function scoreBias(x: {
+export type SignalId =
+  | 'ma_alignment'
+  | 'above_ma200'
+  | 'macd_histogram'
+  | 'macd_cross'
+  | 'rsi_extreme';
+
+export interface Signal {
+  id: SignalId;
+  direction: 'bullish' | 'bearish';
+  reason: string;
+}
+
+/**
+ * 各信号权重。
+ *
+ * ⚠️ 这些数字仍然是**凭经验拍的**。`npm run backtest` 已经能测了，
+ * 但测出来的结论是：不该照测得的值改。原因见下。
+ *
+ * ── 2026-08-21 实测（8 个币种 × 1h/4h/1d，22216 个观测，7:3 切分）──
+ *
+ * 各信号相对基线的信息量（命中率 − 该方向本来的出现频率）：
+ *
+ *   rsi_extreme      +5.7pt   出现 1383 次
+ *   macd_histogram   +0.9pt   出现 15544 次
+ *   macd_cross       -1.9pt   出现 1223 次
+ *   above_ma200      -2.2pt   出现 12208 次
+ *   ma_alignment     -3.3pt   出现 10312 次
+ *
+ * 也就是说，除了 RSI 极值，趋势类信号在这段样本上**略微反向**。
+ *
+ * 按实测值推导出的权重会把 5.16/6.0 全压在 rsi_extreme 上，
+ * 使引擎的表态比例从 79% 掉到 7.4%。整体命中率确实从 30.2% 升到 51.1%，
+ * 但这个提升完全来自「几乎不表态」——是沉默换来的，不是预测力换来的。
+ * 而且 51.1% 仍然低于「无脑全猜震荡」的 51.9%。
+ *
+ * 结论：**规则引擎在本样本上不具备方向预测价值**，调权重解决不了。
+ * 所以保留原权重，并把它的定位从「方向判断」改成「技术面状态的透明描述」——
+ * 见 prompt.ts 里对 bias 的说明。
+ *
+ * 两点方法上的保留：观测窗口高度重叠（1h 上向前看 24 根，相邻观测共享 23 小时），
+ * 有效独立样本约为 22216/horizon 量级；且样本以近年行情为主，
+ * 换一段行情结论未必相同。要重新验证就跑 npm run backtest。
+ */
+export const SIGNAL_WEIGHTS: Record<SignalId, number> = {
+  ma_alignment: 2,
+  above_ma200: 1,
+  macd_histogram: 1,
+  macd_cross: 1.5,
+  rsi_extreme: 0.5,
+};
+
+/** 上次跑回测核对这套权重的日期。npm run backtest -- --apply 会更新它 */
+export const WEIGHTS_MEASURED_AT = '2026-08-21';
+
+export interface SignalInput {
   price: number;
-  ma20: number;
-  ma50: number;
   ma200: number;
   alignment: Bias;
   rsi14: number;
@@ -196,65 +253,101 @@ function scoreBias(x: {
   cross: 'golden' | 'death' | 'none';
   volRatio: number;
   squeeze: boolean;
-}): { bias: Bias; reasons: string[] } {
-  let score = 0;
-  const reasons: string[] = [];
+}
+
+/**
+ * 检测当前触发了哪些方向性信号。
+ *
+ * 只包含**有方向的**信号。成交量与布林挤压不在其中——
+ * 它们描述的是「这个判断可不可靠」而非「往哪边走」，
+ * 放进加权求和会把两种语义混为一谈。它们仍会作为理由显示。
+ */
+export function detectSignals(x: SignalInput): Signal[] {
+  const signals: Signal[] = [];
 
   if (x.alignment === 'bullish') {
-    score += 2;
-    reasons.push('均线多头排列（MA20 > MA50 > MA200）');
+    signals.push({
+      id: 'ma_alignment',
+      direction: 'bullish',
+      reason: '均线多头排列（MA20 > MA50 > MA200）',
+    });
   } else if (x.alignment === 'bearish') {
-    score -= 2;
-    reasons.push('均线空头排列（MA20 < MA50 < MA200）');
+    signals.push({
+      id: 'ma_alignment',
+      direction: 'bearish',
+      reason: '均线空头排列（MA20 < MA50 < MA200）',
+    });
   }
 
   if (!Number.isNaN(x.ma200)) {
-    if (x.price > x.ma200) {
-      score += 1;
-      reasons.push('价格位于 MA200 之上，长期趋势偏多');
-    } else {
-      score -= 1;
-      reasons.push('价格位于 MA200 之下，长期趋势偏空');
-    }
+    signals.push(
+      x.price > x.ma200
+        ? { id: 'above_ma200', direction: 'bullish', reason: '价格位于 MA200 之上，长期趋势偏多' }
+        : { id: 'above_ma200', direction: 'bearish', reason: '价格位于 MA200 之下，长期趋势偏空' },
+    );
   }
 
   if (x.histNow > 0) {
-    score += 1;
-    reasons.push('MACD 柱状图为正，动能偏多');
+    signals.push({ id: 'macd_histogram', direction: 'bullish', reason: 'MACD 柱状图为正，动能偏多' });
   } else if (x.histNow < 0) {
-    score -= 1;
-    reasons.push('MACD 柱状图为负，动能偏空');
+    signals.push({ id: 'macd_histogram', direction: 'bearish', reason: 'MACD 柱状图为负，动能偏空' });
   }
 
   if (x.cross === 'golden') {
-    score += 1.5;
-    reasons.push('MACD 刚形成金叉');
+    signals.push({ id: 'macd_cross', direction: 'bullish', reason: 'MACD 刚形成金叉' });
   } else if (x.cross === 'death') {
-    score -= 1.5;
-    reasons.push('MACD 刚形成死叉');
+    signals.push({ id: 'macd_cross', direction: 'bearish', reason: 'MACD 刚形成死叉' });
   }
 
-  // RSI 极值按"反转风险"处理，而不是简单的多空信号
+  // RSI 极值按「反转风险」处理，而不是简单的多空信号：
+  // 超买给空头方向的分，因为它提示的是追高风险
   if (x.rsi14 >= 70) {
-    score -= 0.5;
-    reasons.push(`RSI ${x.rsi14.toFixed(1)} 进入超买区，追高风险上升`);
+    signals.push({
+      id: 'rsi_extreme',
+      direction: 'bearish',
+      reason: `RSI ${x.rsi14.toFixed(1)} 进入超买区，追高风险上升`,
+    });
   } else if (x.rsi14 <= 30) {
-    score += 0.5;
-    reasons.push(`RSI ${x.rsi14.toFixed(1)} 进入超卖区，存在反弹需求`);
+    signals.push({
+      id: 'rsi_extreme',
+      direction: 'bullish',
+      reason: `RSI ${x.rsi14.toFixed(1)} 进入超卖区，存在反弹需求`,
+    });
   }
 
+  return signals;
+}
+
+/** 无方向的补充说明。不参与打分，但用户和模型都需要看到。 */
+export function contextReasons(x: SignalInput): string[] {
+  const reasons: string[] = [];
   if (x.volRatio >= 1.5) {
     reasons.push(`成交量为 20 周期均量的 ${x.volRatio.toFixed(1)} 倍，属放量`);
   } else if (x.volRatio <= 0.6) {
     reasons.push('成交量明显萎缩，趋势缺乏参与度');
   }
-
   if (x.squeeze) {
     reasons.push('布林带处于近期最窄区间（挤压），变盘概率升高');
   }
+  return reasons;
+}
 
-  const bias: Bias = score >= 2 ? 'bullish' : score <= -2 ? 'bearish' : 'neutral';
-  return { bias, reasons };
+/** 加权求和。权重可注入，回测据此比较不同权重表的优劣。 */
+export function scoreSignals(
+  signals: Signal[],
+  weights: Record<SignalId, number> = SIGNAL_WEIGHTS,
+): { score: number; bias: Bias } {
+  const score = signals.reduce(
+    (sum, s) => sum + (s.direction === 'bullish' ? 1 : -1) * (weights[s.id] ?? 0),
+    0,
+  );
+  return { score, bias: score >= 2 ? 'bullish' : score <= -2 ? 'bearish' : 'neutral' };
+}
+
+function scoreBias(x: SignalInput): { bias: Bias; reasons: string[] } {
+  const signals = detectSignals(x);
+  const { bias } = scoreSignals(signals);
+  return { bias, reasons: [...signals.map((s) => s.reason), ...contextReasons(x)] };
 }
 
 function quantile(arr: number[], q: number): number {

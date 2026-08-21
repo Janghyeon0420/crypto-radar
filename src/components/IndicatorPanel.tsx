@@ -24,7 +24,12 @@ export function IndicatorPanel({ tech }: { tech: TechnicalSnapshot | null }) {
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wide text-zinc-500">规则引擎倾向</span>
+        <span
+          className="cursor-help text-xs uppercase tracking-wide text-zinc-500"
+          title="各项指标的加权汇总。回测显示其方向预测力未跑赢「全猜震荡」基线（2026-08，22216 个观测），应作为技术面状态摘要来看，而不是方向判断依据。"
+        >
+          规则引擎倾向
+        </span>
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${bias.cls}`}>
           {bias.label}
         </span>

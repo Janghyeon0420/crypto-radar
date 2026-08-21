@@ -9,6 +9,8 @@
     "lint": "eslint",
     "test": "node scripts/test.mjs",
     "test:live": "node scripts/test.mjs --live",
+    "backtest": "tsx scripts/backtest-weights.mjs",
+    "backtest:resonance": "tsx scripts/backtest-resonance.mjs",
     "netcheck": "node scripts/check-network.mjs",
     "netcheck:proxy": "NODE_USE_ENV_PROXY=1 node scripts/check-network.mjs"
   },

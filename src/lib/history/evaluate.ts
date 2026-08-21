@@ -14,10 +14,13 @@ import { HORIZON_MS } from './types';
 
 /**
  * 判定"有效波动"的阈值。
+ *
+ * 导出供规则引擎回测复用：两边若各写一套定义，
+ * 「面板上的命中率」和「回测出的命中率」会对不上，而用户无从判断谁对。
  * 取研判当时 ATR% 的 1 倍，并夹在 1%~10% 之间——
  * ATR 极小时阈值太松会把噪音算成方向正确，极大时太严则永远判不对。
  */
-function thresholdFor(atrPercent: number): number {
+export function thresholdFor(atrPercent: number): number {
   if (!Number.isFinite(atrPercent) || atrPercent <= 0) return 2;
   return Math.min(Math.max(atrPercent, 1), 10);
 }

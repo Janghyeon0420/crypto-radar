@@ -8,6 +8,7 @@
  */
 
 import type { TechnicalSnapshot } from '../indicators/summary';
+import { computeResonance } from '../indicators/resonance';
 import type {
   DerivativesSnapshot,
   MacroSnapshot,
@@ -66,7 +67,10 @@ export function buildUserPrompt(input: AnalysisInput): string {
 24h 高/低：${fmt(ticker.high24h)} / ${fmt(ticker.low24h)}
 24h 成交额：${fmtCompact(ticker.quoteVolume24h)} USDT`);
 
-  parts.push('\n## 多周期技术面');
+  parts.push(`\n## 多周期技术面
+说明：下面每个周期末尾的「规则引擎倾向」是各项指标的加权汇总，
+**它的方向预测力经回测未跑赢「全猜震荡」基线**（2026-08 实测，22216 个观测）。
+把它当作「当前技术面处于什么状态」的摘要来读，不要因为它指向某个方向就提高置信度。`);
   for (const t of technicals) {
     parts.push(`
 ### ${t.interval} 周期
@@ -81,6 +85,19 @@ export function buildUserPrompt(input: AnalysisInput): string {
 - 阻力：${t.levels.resistances.map(fmt).join(' / ') || '未识别'}
 - 规则引擎倾向：${zh(t.bias)}
 - 依据：${t.reasons.join('；')}`);
+  }
+
+  // 共振分由确定性代码算好再喂进来，而不是让模型自己去比对三个周期。
+  // 模型可以照样给出自己的判断——两者分歧时，那个分歧本身就值得写进结论
+  const resonance = computeResonance(technicals);
+  if (resonance) {
+    parts.push(`\n## 多周期共振（规则计算）
+共振分：${resonance.score}（-100 全周期看空 ~ +100 全周期看多）
+一致性：${resonance.agreement}%
+判定：${resonance.summary}${resonance.divergence ? `\n背离：${resonance.divergence}` : ''}
+  —— 这是各周期状态一致性的度量，**不是**预测。实测中只有「背离时更易走震荡」
+     这一条有较弱的支持，方向类结论受行情区间影响很大。
+     若你的判断与它相反，请在结论中明确指出分歧所在。`);
   }
 
   if (derivatives) {

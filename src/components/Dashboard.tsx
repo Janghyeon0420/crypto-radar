@@ -17,6 +17,7 @@ import { MarketContext } from './MarketContext';
 import { SourceHealthBar } from './SourceHealthBar';
 import { AlertsPanel } from './AlertsPanel';
 import { MacroPanel } from './MacroPanel';
+import { ResonancePanel } from './ResonancePanel';
 import { AccuracyPanel } from './AccuracyPanel';
 import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
@@ -222,6 +223,7 @@ export function Dashboard() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {tab === 'indicators' && (
               <>
+                <ResonancePanel symbol={active} />
                 <IndicatorPanel tech={data?.technical ?? null} />
                 <div className="border-t border-zinc-800">
                   <NewsPanel baseAsset={baseAsset} />
