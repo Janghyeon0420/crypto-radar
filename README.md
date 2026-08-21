@@ -45,7 +45,17 @@ npm install
 npm run dev
 ```
 
-打开 http://localhost:3000 即可使用。**行情、图表、指标、资讯全部无需任何配置**——
+打开 http://localhost:3000 即可使用。
+
+**要让告警真正 7×24（关掉终端也继续监控），用常驻方式启动：**
+
+```bash
+npm run build && node scripts/setup-launchd.mjs --install
+```
+
+macOS 用 launchd、Linux VPS 用 pm2，两者的完整说明与坑见
+[docs/DEPLOY.md](docs/DEPLOY.md)。`npm run dev` 只适合改代码时用——
+关掉终端告警就停，且不会有任何提示。**行情、图表、指标、资讯全部无需任何配置**——
 核心行情源 `binance.vision` 从中国大陆直连即可访问，实测比走 VPN 更快。
 
 ### 如果你在中国大陆或使用 VPN（重要）
