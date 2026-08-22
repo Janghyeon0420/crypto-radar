@@ -11,10 +11,9 @@
  */
 
 import OpenAI from 'openai';
-import { AnalysisSchema, type Analysis } from '../schema';
 import { JsonExtractionError, parseAndValidate } from './json-repair';
 import { buildSchemaInstruction } from './schema-prompt';
-import type { LlmProvider } from './types';
+import type { GenerateRequest, LlmProvider } from './types';
 
 export interface OpenAiCompatibleConfig {
   apiKey: string;
@@ -42,10 +41,11 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
     model: cfg.model,
     viaRelay: cfg.viaRelay,
 
-    async generate(system, user): Promise<Analysis> {
+    async generate<T>(req: GenerateRequest<T>): Promise<T> {
       // deepseek-reasoner 等推理模型不支持 response_format，
       // 对这类模型改为纯 prompt 约束，靠 json-repair 兜底提取
       const supportsJsonMode = !/reasoner|\bo1\b|\bo3\b/i.test(cfg.model);
+      const instruction = buildSchemaInstruction(req.schema, req.constraints);
 
       let lastError: unknown;
       let repairHint = '';
@@ -55,23 +55,23 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
           const completion = await client.chat.completions.create({
             model: cfg.model,
             // JSON 结构较大，给足输出空间，否则会在中途被截断成非法 JSON
-            max_tokens: 8000,
-            // 研判需要稳定输出，不要发散
+            max_tokens: req.maxTokens ?? 8000,
+            // 需要稳定输出，不要发散
             temperature: 0.3,
             ...(supportsJsonMode ? { response_format: { type: 'json_object' as const } } : {}),
             messages: [
-              { role: 'system', content: system },
+              { role: 'system', content: req.system },
               {
                 role: 'user',
                 // DeepSeek 要求 prompt 中出现 "json" 字样才会遵守 response_format，
                 // buildSchemaInstruction 里已包含该词
-                content: `${user}\n\n${buildSchemaInstruction()}${repairHint}`,
+                content: `${req.user}\n\n${instruction}${repairHint}`,
               },
             ],
           });
 
           const text = completion.choices[0]?.message?.content ?? '';
-          return parseAndValidate(text, AnalysisSchema);
+          return parseAndValidate(text, req.schema);
         } catch (err) {
           lastError = err;
 

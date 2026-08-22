@@ -11,9 +11,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { AnalysisSchema, type Analysis } from '../schema';
 import { parseAndValidate } from './json-repair';
-import type { LlmProvider } from './types';
+import type { GenerateRequest, LlmProvider } from './types';
 
 const DEFAULT_MODEL = 'claude-opus-5';
 
@@ -30,26 +29,26 @@ export function createAnthropicProvider(): LlmProvider {
     model,
     viaRelay: Boolean(baseURL),
 
-    async generate(system, user): Promise<Analysis> {
+    async generate<T>(req: GenerateRequest<T>): Promise<T> {
       try {
         const response = await client.messages.parse({
           model,
-          max_tokens: 8000,
-          // 研判要权衡多周期共振与信号冲突，属于需要推理的任务
-          thinking: { type: 'adaptive' },
+          max_tokens: req.maxTokens ?? 8000,
+          // 需要权衡与取舍的任务（研判）才开思考；归类汇总类任务关掉，更快更便宜
+          ...(req.thinking === false ? {} : { thinking: { type: 'adaptive' as const } }),
           output_config: {
             effort: 'medium',
-            format: zodOutputFormat(AnalysisSchema),
+            format: zodOutputFormat(req.schema),
           },
           system: [
             {
               type: 'text',
-              text: system,
-              // system prompt 完全固定，缓存它可省下重复研判的输入成本
+              text: req.system,
+              // system prompt 完全固定，缓存它可省下重复调用的输入成本
               cache_control: { type: 'ephemeral' },
             },
           ],
-          messages: [{ role: 'user', content: user }],
+          messages: [{ role: 'user', content: req.user }],
         });
 
         if (!response.parsed_output) {
@@ -61,7 +60,7 @@ export function createAnthropicProvider(): LlmProvider {
         // 表现为 400。这种情况降级到纯 prompt 约束 + 本地校验，而不是直接失败。
         if (isUnsupportedParamError(err)) {
           console.warn('[anthropic] 该端点不支持 structured outputs，降级为 prompt 约束模式');
-          return generateFallback(client, model, system, user);
+          return generateFallback(client, model, req);
         }
         throw err;
       }
@@ -78,19 +77,23 @@ function isUnsupportedParamError(err: unknown): boolean {
 }
 
 /** 降级路径：把 schema 写进 prompt，让模型直接吐 JSON，再本地校验 */
-async function generateFallback(
+async function generateFallback<T>(
   client: Anthropic,
   model: string,
-  system: string,
-  user: string,
-): Promise<Analysis> {
+  req: GenerateRequest<T>,
+): Promise<T> {
   const { buildSchemaInstruction } = await import('./schema-prompt');
 
   const response = await client.messages.create({
     model,
-    max_tokens: 8000,
-    system,
-    messages: [{ role: 'user', content: `${user}\n\n${buildSchemaInstruction()}` }],
+    max_tokens: req.maxTokens ?? 8000,
+    system: req.system,
+    messages: [
+      {
+        role: 'user',
+        content: `${req.user}\n\n${buildSchemaInstruction(req.schema, req.constraints)}`,
+      },
+    ],
   });
 
   const text = response.content
@@ -98,5 +101,5 @@ async function generateFallback(
     .map((b) => b.text)
     .join('\n');
 
-  return parseAndValidate(text, AnalysisSchema);
+  return parseAndValidate(text, req.schema);
 }

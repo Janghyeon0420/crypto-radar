@@ -66,3 +66,19 @@ export const AnalysisSchema = z.object({
 });
 
 export type Analysis = z.infer<typeof AnalysisSchema>;
+
+/**
+ * schema 表达不了、但模型必须遵守的约束。
+ *
+ * 只有走 prompt 约束模式的供应商（DeepSeek 及多数中转站）会读到它——
+ * 放在这里而不是 schema-prompt.ts，是因为它属于「研判的输出契约」，
+ * 与 AnalysisSchema 是同一件事的两半，改字段时应当一起改。
+ */
+export const ANALYSIS_CONSTRAINTS = [
+  'confidence 是 0-100 的整数',
+  'factors 至少 3 条，每条的 note 必须引用输入数据中的具体数值',
+  'scenarios 有 2-3 个，probability 之和应接近 100',
+  'risks 至少 2 条',
+  'dataGaps 在无缺失时返回空数组 []，不要省略该字段',
+  'weight 和 probability 用数字，不要写成字符串',
+];

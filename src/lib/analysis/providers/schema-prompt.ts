@@ -7,16 +7,28 @@
  */
 
 import { z } from 'zod';
-import { AnalysisSchema } from '../schema';
 
-let cached: string | null = null;
+/**
+ * 说明文本按 schema 缓存。
+ * z.toJSONSchema + JSON.stringify 对研判那种大 schema 不便宜，
+ * 而同一个 schema 每次生成的说明完全一样。
+ *
+ * 用 schema 对象本身作键：各调用方的 constraints 与其 schema 一一对应，
+ * 不会出现同一 schema 配不同约束的情况。
+ */
+const cache = new WeakMap<z.ZodType, string>();
 
-export function buildSchemaInstruction(): string {
-  if (cached) return cached;
+export function buildSchemaInstruction(schema: z.ZodType, constraints: string[] = []): string {
+  const hit = cache.get(schema);
+  if (hit) return hit;
 
-  const jsonSchema = z.toJSONSchema(AnalysisSchema);
+  const jsonSchema = z.toJSONSchema(schema);
 
-  cached = `## 输出格式要求
+  const extra = [...constraints, '所有文本字段用中文']
+    .map((c) => `- ${c}`)
+    .join('\n');
+
+  const text = `## 输出格式要求
 
 你必须只输出一个 JSON 对象，不要输出任何其它文字，不要用 markdown 代码块包裹。
 
@@ -25,15 +37,10 @@ export function buildSchemaInstruction(): string {
 ${JSON.stringify(jsonSchema, null, 2)}
 
 补充约束（这些是 schema 表达不了但必须遵守的）：
-- confidence 是 0-100 的整数
-- factors 至少 3 条，每条的 note 必须引用输入数据中的具体数值
-- scenarios 有 2-3 个，probability 之和应接近 100
-- risks 至少 2 条
-- dataGaps 在无缺失时返回空数组 []，不要省略该字段
-- weight 和 probability 用数字，不要写成字符串
-- 所有文本字段用中文
+${extra}
 
 直接输出 JSON：`;
 
-  return cached;
+  cache.set(schema, text);
+  return text;
 }
