@@ -62,8 +62,19 @@ npm run build && node scripts/setup-launchd.mjs --install
 
 macOS 用 launchd、Linux VPS 用 pm2，两者的完整说明与坑见
 [docs/DEPLOY.md](docs/DEPLOY.md)。`npm run dev` 只适合改代码时用——
-关掉终端告警就停，且不会有任何提示。**行情、图表、指标、资讯全部无需任何配置**——
+关掉终端告警就停，且不会有任何提示。
+**行情、图表、指标、资讯全部无需任何配置**——
 核心行情源 `binance.vision` 从中国大陆直连即可访问，实测比走 VPN 更快。
+
+**桌面图标（macOS）**——不想每天开终端的话，生成一个双击即用的 App：
+
+```bash
+node scripts/make-desktop-app.mjs
+```
+
+桌面上会多出一个 `Crypto Radar.app`：双击时如果常驻服务已在跑就直接开看板，
+没在跑就先弹一个等待页、同时叫 launchd 把服务拉起来，起来后自动跳转。
+它不复制任何启动逻辑，只是 `com.crypto-radar` 这个 launchd 服务的开关与入口。
 
 ### 如果你在中国大陆或使用 VPN（重要）
 
