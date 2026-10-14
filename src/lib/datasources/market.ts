@@ -108,13 +108,16 @@ export async function fetchCandles(
   return (await fetchCandlesWithSource(symbol, interval, limit)).candles;
 }
 
+const SOURCE_LABEL: Record<Exchange, string> = { binance: '币安镜像', okx: 'OKX' };
+const failureText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 /** Return provenance from the fetch itself, including a temporary fallback. */
 export async function fetchCandlesWithSource(
   symbol: string, interval: Interval, limit = 500, options: { fresh?: boolean } = {},
 ): Promise<{ candles: Candle[]; source: Exchange }> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('limit 必须为 1–1000 的整数');
   const preferred = await resolveExchange(symbol);
-  let lastError: unknown;
+  const failures: { source: Exchange; err: unknown }[] = [];
   for (const source of [preferred, preferred === 'binance' ? 'okx' : 'binance'] as Exchange[]) {
     try {
       const candles = await (source === 'binance' ? fetchBinanceCandles : fetchOkxCandles)(symbol, interval, limit, undefined, options);
@@ -123,10 +126,23 @@ export async function fetchCandlesWithSource(
       rememberSource(symbol, source);
       return { candles, source };
     } catch (err) {
-      lastError = err;
+      failures.push({ source, err });
     }
   }
-  throw lastError;
+
+  // 两家都失败：以**主源**的失败为主，并说明回退源也没成。
+  // 以前直接抛最后一次（回退源）的错误，会把真正的根因盖住——比如币安超时、OKX 又不认识这个交易对，
+  // 用户只会看到「OKX 接口返回错误」，然后去查 OKX。状态码与 cause 也取主源的：
+  // 上层（api-error）据此决定错误码与提示，排查时也能顺着 cause 找到底层错误码。
+  const [primary, fallback] = failures;
+  const primaryErr = primary.err instanceof UpstreamError ? primary.err : undefined;
+  throw new UpstreamError(
+    `${SOURCE_LABEL[primary.source]}失败：${failureText(primary.err)}；` +
+      `回退到${SOURCE_LABEL[fallback.source]}也失败：${failureText(fallback.err)}`,
+    primaryErr?.status,
+    primaryErr?.url,
+    { cause: primary.err },
+  );
 }
 
 const DURATION: Record<Interval, number> = {

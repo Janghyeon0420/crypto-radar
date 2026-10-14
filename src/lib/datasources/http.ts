@@ -41,10 +41,43 @@ export class UpstreamError extends Error {
     message: string,
     readonly status?: number,
     readonly url?: string,
+    /** 底层原始错误。归一化成一句话之后，排查还要靠它（ECONNRESET、ENOTFOUND、代理没开……） */
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
     this.name = 'UpstreamError';
   }
+}
+
+/** 沿 cause 链找到最底层的错误码：fetch failed 的真正原因在 cause.code 里，不在 message 里 */
+function rootCode(err: unknown): string | undefined {
+  let e: unknown = err;
+  for (let depth = 0; e && depth < 5; depth++) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/**
+ * 把一次失败的请求翻译成一句能指路的话，并保留原始错误。
+ *
+ * 三种失败需要分开说，以前都被笼统归成「无法连接」：
+ *   - 超时：请求发出去了但没等到
+ *   - 连不上：带上底层错误码——ECONNREFUSED 通常是代理没开，ENOTFOUND 是 DNS，ECONNRESET 是被掐断
+ *   - 收到了但不是 JSON：多半是被 WAF / 验证页拦了（200 加一段 HTML），说「连不上」会把人带偏
+ */
+function describeFetchFailure(err: unknown, url: string, timedOut: boolean, timeoutMs: number): UpstreamError {
+  const host = hostOf(url);
+  if (timedOut) {
+    return new UpstreamError(`请求 ${host} 超时（${timeoutMs / 1000} 秒）`, undefined, url, { cause: err });
+  }
+  if (err instanceof SyntaxError) {
+    return new UpstreamError(`${host} 返回了无法解析的响应（不是 JSON，可能被拦截或限流）`, undefined, url, { cause: err });
+  }
+  const code = rootCode(err);
+  return new UpstreamError(`无法连接 ${host}${code ? `（${code}）` : ''}`, undefined, url, { cause: err });
 }
 
 /**
@@ -100,10 +133,9 @@ async function requestJson<T>(url: string, opts: FetchOptions): Promise<T> {
       if (ttlMs > 0) cache.set(url, { value, expiresAt: Date.now() + ttlMs });
       return value;
     } catch (err) {
-      lastErr = err instanceof UpstreamError ? err : new UpstreamError(
-        controller.signal.aborted ? `请求 ${hostOf(url)} 超时（${timeoutMs / 1000} 秒）` : `无法连接 ${hostOf(url)}`,
-        undefined, url,
-      );
+      lastErr = err instanceof UpstreamError
+        ? err
+        : describeFetchFailure(err, url, controller.signal.aborted, timeoutMs);
       // 地理封锁和 4xx 重试没有意义，立即抛出交给上层降级
       if (err instanceof UpstreamError && err.status && err.status < 500 && err.status !== 429) {
         throw err;
