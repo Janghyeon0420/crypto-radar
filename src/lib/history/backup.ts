@@ -18,8 +18,12 @@ import path from 'node:path';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
-/** 需要快照的文件。锁文件与备份目录本身不在其中 */
-const FILES = ['analyses.json', 'alert-rules.json', 'alert-events.json'];
+/**
+ * 需要快照的文件。锁文件与备份目录本身不在其中。
+ * steady.json 是用户手填的投资计划与持仓——研判历史丢了可以重新攒，这个丢了只能重填，
+ * 而且恰恰是在「电脑坏了」那种最不想再折腾的时候。
+ */
+const FILES = ['analyses.json', 'alert-rules.json', 'alert-events.json', 'steady.json'];
 
 /** 保留多少份。每天一份，两周足够覆盖「上周好像还在」这类回溯需求 */
 const KEEP = 14;
