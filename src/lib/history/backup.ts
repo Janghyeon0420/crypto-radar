@@ -15,6 +15,7 @@
 
 import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { forecastDataDir } from '../forecast/store';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
@@ -48,7 +49,7 @@ export interface BackupResult {
 export async function backupDataFiles(now = new Date()): Promise<BackupResult | null> {
   const stamp = now.toISOString().slice(0, 10);
   const root = backupDir();
-  const dest = path.join(root, stamp);
+  const dest = path.join(/* turbopackIgnore: true */ root, stamp);
 
   const files: string[] = [];
   const skipped: string[] = [];
@@ -65,8 +66,20 @@ export async function backupDataFiles(now = new Date()): Promise<BackupResult | 
     }
     // copyFile 不是原子的，但源文件的写入本身已经串行化（store.ts），
     // 且这里只是快照——真正的一致性保证在写入侧，不在这里
-    await copyFile(src, path.join(dest, name));
+    await copyFile(src, path.join(/* turbopackIgnore: true */ dest, name));
     files.push(name);
+  }
+
+  // 每次预测与复盘结果都是不可变文件；只复制已发布 JSON，忽略写入中的临时文件。
+  const forecastRoot = forecastDataDir();
+  const forecastFiles = await readdir(forecastRoot).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  for (const name of forecastFiles.filter(n => /^[a-f0-9]{32}(\.evaluation)?\.json$/.test(n))) {
+    await mkdir(path.join(dest, 'forecasts'), { recursive: true });
+    await copyFile(path.join(forecastRoot, name), path.join(dest, 'forecasts', name));
+    files.push(`forecasts/${name}`);
   }
 
   // 一个文件都没备份到时把空目录删掉，不留下误导性的痕迹

@@ -13,6 +13,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type { Candle } from '@/lib/datasources/types';
+import type { ForecastRecord } from '@/lib/forecast/types';
 
 /**
  * K 线主图。
@@ -34,11 +35,13 @@ export function PriceChart({
   candles,
   overlays,
   priceLines,
+  forecast,
 }: {
   candles: Candle[];
   /** 叠加在主图上的线，如均线、布林带 */
   overlays?: { label: string; color: string; data: (number | null)[] }[];
   priceLines?: PriceLine[];
+  forecast?: ForecastRecord | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -46,6 +49,9 @@ export function PriceChart({
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const overlayRefs = useRef<ISeriesApi<'Line'>[]>([]);
   const priceLineRefs = useRef<IPriceLine[]>([]);
+  const forecastSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const forecastBoundRefs = useRef<ISeriesApi<'Line'>[]>([]);
+  const positionedForecastRef = useRef<string | null>(null);
 
   // 建图只做一次，数据更新走 setData，避免每次刷新都重建 canvas
   useEffect(() => {
@@ -75,6 +81,24 @@ export function PriceChart({
       wickDownColor: '#f43f5e',
     });
 
+    // 预测单独成序列，始终用紫色空心 K 线，避免与真实红绿蜡烛混淆。
+    forecastSeriesRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: 'rgba(167,139,250,0.06)',
+      downColor: 'rgba(167,139,250,0.06)',
+      borderVisible: true,
+      borderUpColor: 'rgba(167,139,250,0.75)',
+      borderDownColor: 'rgba(167,139,250,0.75)',
+      wickUpColor: 'rgba(167,139,250,0.6)',
+      wickDownColor: 'rgba(167,139,250,0.6)',
+      priceLineVisible: false,
+      lastValueVisible: false,
+      title: '预测 · 非实际',
+    });
+    forecastBoundRefs.current = ['ATR 情景上界', 'ATR 情景下界'].map((title) => chart.addSeries(LineSeries, {
+      title, color: 'rgba(167,139,250,0.5)', lineWidth: 1, lineStyle: LineStyle.Dashed,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    }));
+
     volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -90,6 +114,10 @@ export function PriceChart({
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       overlayRefs.current = [];
+      forecastSeriesRef.current = null;
+      forecastBoundRefs.current = [];
+      positionedForecastRef.current = null;
+      priceLineRefs.current = [];
     };
   }, []);
 
@@ -114,6 +142,33 @@ export function PriceChart({
       })),
     );
   }, [candles]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = forecastSeriesRef.current;
+    if (!chart || !series) return;
+    const lastRealTime = candles.at(-1)?.time ?? 0;
+    const future = forecast?.candles.filter((c) => c.time > lastRealTime) ?? [];
+    series.setData(future.map((c) => ({
+      time: (c.time / 1000) as UTCTimestamp,
+      open: c.open, high: c.high, low: c.low, close: c.close,
+    })));
+    forecastBoundRefs.current.forEach((bound, index) => {
+      bound.setData(future.map((c) => ({
+        time: (c.time / 1000) as UTCTimestamp, value: index === 0 ? c.upper : c.lower,
+      })));
+    });
+    if (forecast && future.length && positionedForecastRef.current !== forecast.id) {
+      // 给预测留出可见空间，同时保留最近一段真实走势作上下文。
+      const range = chart.timeScale().getVisibleLogicalRange();
+      const width = range ? Math.max(40, Math.min(180, range.to - range.from)) : 100;
+      const to = candles.length + future.length + 3;
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - width), to });
+      positionedForecastRef.current = forecast.id;
+    } else if (!forecast) {
+      positionedForecastRef.current = null;
+    }
+  }, [forecast, candles]);
 
   useEffect(() => {
     const chart = chartRef.current;

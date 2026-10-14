@@ -15,6 +15,9 @@ export async function register() {
   const { startWorker } = await import('./lib/alerts/worker');
   startWorker();
 
+  const { startForecastWorker } = await import('./lib/forecast/worker');
+  startForecastWorker();
+
   void warmMacroCache();
 }
 

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useWatchlist } from '@/lib/stores/watchlist';
 import { useLiveTickers } from '@/lib/hooks/useLiveTickers';
+import { useForecast } from '@/lib/hooks/useForecast';
+import { INTERVAL_MS } from '@/lib/forecast/types';
 import { INTERVALS, type Candle, type Interval } from '@/lib/datasources/types';
 import type { TechnicalSnapshot } from '@/lib/indicators/summary';
 import { ema, sma, bollinger } from '@/lib/indicators';
@@ -21,12 +23,15 @@ import { ResonancePanel } from './ResonancePanel';
 import { MicrostructurePanel } from './MicrostructurePanel';
 import { ComparePanel } from './ComparePanel';
 import { AccuracyPanel } from './AccuracyPanel';
+import { TechnicalForecastPanel } from './TechnicalForecastPanel';
+import { ForecastPanel } from './ForecastPanel';
 import { useAlertEvents } from '@/lib/hooks/useAlertEngine';
 
-type PanelTab = 'indicators' | 'analysis' | 'compare' | 'macro' | 'alerts';
+type PanelTab = 'indicators' | 'forecast' | 'analysis' | 'compare' | 'macro' | 'alerts';
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: 'indicators', label: '技术面' },
+  { id: 'forecast', label: '预测' },
   { id: 'analysis', label: 'AI 研判' },
   { id: 'compare', label: '对比' },
   { id: 'macro', label: '宏观' },
@@ -65,6 +70,7 @@ interface KlineResponse {
   source?: string;
   candles: Candle[];
   technical: TechnicalSnapshot | null;
+  loadedAt: number;
 }
 
 export function Dashboard() {
@@ -72,6 +78,8 @@ export function Dashboard() {
   const [interval, setIntervalState] = useState<Interval>('1h');
   const [showOverlays, setShowOverlays] = useState(true);
   const [showLevels, setShowLevels] = useState(true);
+  const [showForecast, setShowForecast] = useState(false);
+  const [marketRetry, setMarketRetry] = useState(0);
   /** 该币最近一次研判给出的关键价位。没有研判过则为空 */
   const [levels, setLevels] = useState<{ key: string; lines: PriceLine[] }>({ key: '', lines: [] });
   const [tab, setTab] = useState<PanelTab>('indicators');
@@ -94,6 +102,19 @@ export function Dashboard() {
   const loading = Boolean(active) && result.key !== requestKey;
   const data = result.key === requestKey ? result.data : null;
   const error = result.key === requestKey ? result.error : null;
+  const anchorTime = useMemo(() => {
+    if (!data) return null;
+    const closed = data.candles.filter((c) => c.time + INTERVAL_MS[interval] <= data.loadedAt);
+    return closed.at(-1)?.time ?? null;
+  }, [data, interval]);
+  const forecast = useForecast({ symbol: active, interval, enabled: showForecast, anchorTime });
+  const sourceMismatch = Boolean(forecast.record && data?.source && forecast.record.source !== data.source);
+  const chartForecast = sourceMismatch ? null : forecast.record;
+  const setForecastEnabled = (enabled: boolean) => {
+    // 再次开启同一锚点也进入新的请求状态，不暂留上一次错误或结果。
+    if (enabled) forecast.retry();
+    setShowForecast(enabled);
+  };
 
   const ticks = useLiveTickers(active ? [active] : []);
   const live = ticks[active];
@@ -101,21 +122,37 @@ export function Dashboard() {
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
+    let running = false;
+    let controller: AbortController | null = null;
 
     const load = async () => {
+      if (running) return;
+      running = true;
+      const ac = new AbortController();
+      controller = ac;
+      let timedOut = false;
+      const timeout = setTimeout(() => { timedOut = true; ac.abort(); }, 60_000);
       try {
-        const res = await fetch(`/api/market/klines?symbol=${active}&interval=${interval}&limit=500`);
-        const json = await res.json();
+        const res = await fetch(`/api/market/klines?symbol=${encodeURIComponent(active)}&interval=${interval}&limit=500`, {
+          signal: ac.signal,
+        });
+        const body = await res.text();
+        let json;
+        try { json = JSON.parse(body); } catch { throw new Error(`行情响应无法解析（HTTP ${res.status}），请重试`); }
         if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-        if (!cancelled) setResult({ key: requestKey, data: json, error: null });
+        if (!Array.isArray(json.candles) || !json.candles.length) throw new Error('行情暂未返回 K 线，请重试');
+        if (!cancelled) setResult({ key: requestKey, data: { ...json, loadedAt: Date.now() }, error: null });
       } catch (err) {
         if (!cancelled) {
-          setResult({
+          setResult((previous) => ({
             key: requestKey,
-            data: null,
-            error: err instanceof Error ? err.message : String(err),
-          });
+            data: previous.key === requestKey ? previous.data : null,
+            error: timedOut ? '行情请求超时，请重试' : err instanceof Error ? err.message : String(err),
+          }));
         }
+      } finally {
+        clearTimeout(timeout);
+        running = false;
       }
     };
 
@@ -126,8 +163,9 @@ export function Dashboard() {
     return () => {
       cancelled = true;
       clearInterval(timer);
+      controller?.abort();
     };
-  }, [active, interval, requestKey]);
+  }, [active, interval, requestKey, marketRetry]);
 
   // 叠加线在前端算：这几条线依赖的收盘价数组已经在手上，
   // 再往返一次服务端不划算，而且开关叠加时可以零延迟响应。
@@ -200,8 +238,8 @@ export function Dashboard() {
         </aside>
 
         {/* 中栏：主图 */}
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-3">
+        <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3">
             <div className="flex items-baseline gap-4">
               <h2 className="text-lg font-medium">{active || '未选择'}</h2>
               {price != null && (
@@ -216,7 +254,13 @@ export function Dashboard() {
               )}
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-violet-300">
+                <input type="checkbox" checked={showForecast} disabled={!active}
+                  onChange={(e) => { setForecastEnabled(e.target.checked); if (e.target.checked) setTab('forecast'); }}
+                  className="h-3.5 w-3.5 accent-violet-400" />
+                预测走势
+              </label>
               <button
                 onClick={() => setShowOverlays((v) => !v)}
                 className={`text-xs ${showOverlays ? 'text-zinc-300' : 'text-zinc-600'} hover:text-zinc-100`}
@@ -259,12 +303,32 @@ export function Dashboard() {
             </div>
           </div>
 
-          <div className="relative min-h-0 flex-1">
+          <div className="relative min-h-56 flex-1">
             {error && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-zinc-950/80">
-                <p className="max-w-md rounded-lg bg-rose-500/10 px-4 py-3 text-sm text-rose-400 ring-1 ring-rose-500/20">
-                  {error}
-                </p>
+              <div className={`absolute z-10 flex items-center justify-center ${data ? 'inset-x-3 bottom-3' : 'inset-0 bg-zinc-950/80'}`}>
+                <div role="alert" className="max-w-md rounded-lg bg-zinc-950/95 px-4 py-3 text-sm text-rose-400 ring-1 ring-rose-500/20">
+                  <p>{error}</p>
+                  {data && <p className="mt-1 text-xs text-zinc-500">正在显示上次成功加载的行情。</p>}
+                  <button type="button" onClick={() => setMarketRetry((v) => v + 1)} className="mt-2 text-xs underline underline-offset-2">重试行情</button>
+                </div>
+              </div>
+            )}
+            {showForecast && data && (
+              <div className="absolute left-3 top-3 z-10 max-w-[calc(100%-6rem)] rounded-md border border-violet-400/20 bg-zinc-950/90 px-3 py-2 text-[11px] text-violet-200">
+                {forecast.generating ? <span role="status">正在生成 {interval} 预测…</span> : forecast.error ? (
+                  <div role="alert">{forecast.error} <button type="button" onClick={forecast.retry} className="ml-2 underline">重试预测</button></div>
+                ) : sourceMismatch ? (
+                  <div className="text-amber-300">
+                    预测来自 {forecast.record?.source.toUpperCase()}，当前行情来自 {data.source?.toUpperCase()}，暂不叠加。
+                    <button type="button" onClick={() => setMarketRetry((v) => v + 1)} className="ml-2 underline">刷新行情</button>
+                    <button type="button" onClick={forecast.retry} className="ml-2 underline">重试预测</button>
+                  </div>
+                ) : chartForecast ? (
+                  <>
+                    <p>▯ 紫色空心 K 线：预测，非实际 · {chartForecast.horizonBars} 根 {interval} · {chartForecast.source.toUpperCase()}</p>
+                    <p className="mt-1 text-violet-300/70">虚线：ATR 情景范围，未经概率校准</p>
+                  </>
+                ) : <span>等待已收盘行情…</span>}
               </div>
             )}
             {loading && (
@@ -273,7 +337,7 @@ export function Dashboard() {
               </div>
             )}
             {data && (
-              <PriceChart candles={data.candles} overlays={overlays} priceLines={priceLines} />
+              <PriceChart key={requestKey} candles={data.candles} overlays={overlays} priceLines={priceLines} forecast={chartForecast} />
             )}
           </div>
 
@@ -301,6 +365,10 @@ export function Dashboard() {
           </nav>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
+            {tab === 'forecast' && (
+              <TechnicalForecastPanel symbol={active} interval={interval} enabled={showForecast}
+                onEnabledChange={setForecastEnabled} forecast={forecast} />
+            )}
             {tab === 'indicators' && (
               <>
                 <ResonancePanel symbol={active} />
@@ -336,6 +404,7 @@ export function Dashboard() {
           </div>
         </aside>
       </div>
+      <ForecastPanel symbol={active} />
     </div>
   );
 }
