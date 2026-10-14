@@ -22,6 +22,7 @@ import {
 } from './binance-vision';
 import { fetchOkxCandles, fetchOkxSpotSymbols, fetchOkxTickers } from './okx';
 import type { Candle, Interval, Ticker } from './types';
+import { UpstreamError } from './http';
 
 export type Exchange = 'binance' | 'okx';
 
@@ -42,12 +43,22 @@ const KEY = Symbol.for('crypto-radar.market.registry');
 const g = globalThis as unknown as Record<symbol, Registry | undefined>;
 
 const TTL_MS = 3600_000;
+const SOURCE_KEY = Symbol.for('crypto-radar.market.sources');
+const sourceGlobal = globalThis as unknown as Record<symbol, Map<string, { source: Exchange; until: number }> | undefined>;
+sourceGlobal[SOURCE_KEY] ??= new Map();
+const recentSources = sourceGlobal[SOURCE_KEY];
 
-async function registry(): Promise<Registry> {
+function rememberSource(symbol: string, source: Exchange) {
+  recentSources.set(symbol, { source, until: Date.now() + 60_000 });
+}
+
+async function registry(knownBinance?: SymbolInfo[]): Promise<Registry> {
   const cached = g[KEY];
   if (cached && Date.now() - cached.at < TTL_MS) return cached;
 
-  const [binance, okx] = await Promise.allSettled([fetchUsdtSymbols(), fetchOkxSpotSymbols()]);
+  const [binance, okx] = await Promise.allSettled([
+    knownBinance ? Promise.resolve(knownBinance) : fetchUsdtSymbols(), fetchOkxSpotSymbols(),
+  ]);
 
   const next: Registry = {
     binance: new Set(
@@ -72,7 +83,18 @@ async function registry(): Promise<Registry> {
  * 猜错的代价是一次失败的请求，而不是把所有币都路由错。
  */
 export async function resolveExchange(symbol: string): Promise<Exchange> {
-  const reg = await registry();
+  const recent = recentSources.get(symbol);
+  if (recent && recent.until > Date.now()) return recent.source;
+  const cached = g[KEY];
+  if (cached && Date.now() - cached.at < TTL_MS) {
+    if (cached.binance.has(symbol)) return 'binance';
+    if (cached.okx.has(symbol)) return 'okx';
+  }
+  // Do not wait for OKX's registry when Binance already lists this symbol.
+  // An unavailable secondary exchange used to stall every cold page request.
+  const binance = await fetchUsdtSymbols().catch(() => [] as SymbolInfo[]);
+  if (binance.some((entry) => entry.symbol === symbol)) return 'binance';
+  const reg = await registry(binance);
   if (reg.binance.has(symbol)) return 'binance';
   if (reg.okx.has(symbol)) return 'okx';
   return 'binance';
@@ -83,10 +105,59 @@ export async function fetchCandles(
   interval: Interval,
   limit = 500,
 ): Promise<Candle[]> {
-  const ex = await resolveExchange(symbol);
-  return ex === 'okx'
-    ? fetchOkxCandles(symbol, interval, limit)
-    : fetchBinanceCandles(symbol, interval, limit);
+  return (await fetchCandlesWithSource(symbol, interval, limit)).candles;
+}
+
+/** Return provenance from the fetch itself, including a temporary fallback. */
+export async function fetchCandlesWithSource(
+  symbol: string, interval: Interval, limit = 500, options: { fresh?: boolean } = {},
+): Promise<{ candles: Candle[]; source: Exchange }> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('limit 必须为 1–1000 的整数');
+  const preferred = await resolveExchange(symbol);
+  let lastError: unknown;
+  for (const source of [preferred, preferred === 'binance' ? 'okx' : 'binance'] as Exchange[]) {
+    try {
+      const candles = await (source === 'binance' ? fetchBinanceCandles : fetchOkxCandles)(symbol, interval, limit, undefined, options);
+      validateCandles(candles);
+      if (candles.length === 0) throw new UpstreamError(`${source} 未返回该交易对 K 线`);
+      rememberSource(symbol, source);
+      return { candles, source };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+const DURATION: Record<Interval, number> = {
+  '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000,
+  '4h': 14_400_000, '1d': 86_400_000, '1w': 604_800_000,
+};
+
+/** Inclusive open-time window, pinned to the original exchange for honest review. */
+export async function fetchCandleWindow(
+  symbol: string, interval: Interval, startTime: number, endTime: number, source: Exchange,
+): Promise<Candle[]> {
+  const duration = DURATION[interval];
+  if (!duration || !Number.isSafeInteger(startTime) || !Number.isSafeInteger(endTime) || startTime < 0 || endTime < startTime) {
+    throw new Error('历史 K 线时间窗口非法');
+  }
+  const limit = Math.floor((endTime - startTime) / duration) + 1;
+  if (limit > 100) throw new Error('单次复盘最多读取 100 根历史 K 线');
+  if (source !== 'binance' && source !== 'okx') throw new Error('历史 K 线来源非法');
+  const candles = await (source === 'binance' ? fetchBinanceCandles : fetchOkxCandles)(
+    symbol, interval, limit, { startTime, endTime },
+  );
+  validateCandles(candles);
+  return candles.filter((c) => c.time >= startTime && c.time <= endTime);
+}
+
+function validateCandles(candles: Candle[]) {
+  if (candles.some((c, i) =>
+    ![c.time, c.open, c.high, c.low, c.close, c.volume].every(Number.isFinite) ||
+    c.time < 0 || c.low <= 0 || c.volume < 0 || c.high < Math.max(c.open, c.close, c.low) ||
+    c.low > Math.min(c.open, c.close) || (i > 0 && c.time <= candles[i - 1].time)
+  )) throw new UpstreamError('上游 K 线数据无效，已停止指标和预测计算');
 }
 
 /**
@@ -101,22 +172,24 @@ export async function fetchCandles(
 export async function fetchTickers(symbols?: string[]): Promise<Ticker[]> {
   if (!symbols) return fetchBinanceTickers();
 
-  const reg = await registry();
+  if (symbols.length === 0) return [];
+  const exchanges = await Promise.all(symbols.map(resolveExchange));
   const binance: string[] = [];
   const okx: string[] = [];
 
-  for (const s of symbols) {
-    if (reg.binance.has(s)) binance.push(s);
-    else if (reg.okx.has(s)) okx.push(s);
-    else binance.push(s);
-  }
+  symbols.forEach((symbol, i) => {
+    (exchanges[i] === 'okx' ? okx : binance).push(symbol);
+  });
 
   const [b, o] = await Promise.allSettled([
     binance.length ? fetchBinanceTickers(binance) : Promise.resolve([]),
     okx.length ? fetchOkxTickers(okx) : Promise.resolve([]),
   ]);
 
-  // 一家挂掉不该让另一家的币也没有行情
+  // Preserve successful results, but never present a total outage as an empty 200.
+  if ((binance.length === 0 || b.status === 'rejected') && (okx.length === 0 || o.status === 'rejected')) {
+    throw b.status === 'rejected' ? b.reason : o.status === 'rejected' ? o.reason : new UpstreamError('行情暂不可用');
+  }
   return [
     ...(b.status === 'fulfilled' ? b.value : []),
     ...(o.status === 'fulfilled' ? o.value : []),

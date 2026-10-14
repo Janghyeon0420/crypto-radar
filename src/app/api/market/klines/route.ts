@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchCandles, resolveExchange } from '@/lib/datasources/market';
+import { fetchCandlesWithSource } from '@/lib/datasources/market';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import { INTERVALS, type Interval } from '@/lib/datasources/types';
 import { apiError } from '@/lib/api-error';
@@ -14,7 +14,10 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const symbol = (searchParams.get('symbol') ?? 'BTCUSDT').toUpperCase();
   const interval = searchParams.get('interval') as Interval | null;
-  const limit = Math.min(Number(searchParams.get('limit')) || 500, 1000);
+  const limit = searchParams.has('limit') ? Number(searchParams.get('limit')) : 500;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    return NextResponse.json({ error: 'limit 必须为 1–1000 的整数' }, { status: 400 });
+  }
 
   if (!interval || !INTERVALS.includes(interval)) {
     return NextResponse.json(
@@ -27,18 +30,18 @@ export async function GET(req: Request) {
   }
 
   try {
-    const candles = await fetchCandles(symbol, interval, limit);
+    const { candles, source } = await fetchCandlesWithSource(symbol, interval, limit);
     return NextResponse.json({
       symbol,
       interval,
       // 数据来自哪家交易所。前端据此判断盘口流能不能用——
       // 盘口只覆盖币安，非币安的币若一直显示「连接中…」，
       // 看上去像马上就好，其实永远不会好
-      source: await resolveExchange(symbol),
+      source,
       candles,
       technical: buildTechnicalSnapshot(candles, interval),
     });
   } catch (err) {
-    return apiError(err, 'binance.vision');
+    return apiError(err, '行情数据源');
   }
 }

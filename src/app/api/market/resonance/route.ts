@@ -28,6 +28,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ resonance: computeResonance(snapshots) });
   } catch (err) {
-    return apiError(err, 'binance.vision');
+    return apiError(err, '行情数据源');
   }
 }

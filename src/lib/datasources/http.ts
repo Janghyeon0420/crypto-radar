@@ -31,6 +31,8 @@ export interface FetchOptions {
   ttlMs?: number;
   timeoutMs?: number;
   retries?: number;
+  /** Disable sharing an in-flight request when the caller needs a fresh observation. */
+  dedupe?: boolean;
   headers?: Record<string, string>;
 }
 
@@ -46,14 +48,34 @@ export class UpstreamError extends Error {
 }
 
 /**
- * 451 是币安主站对受限地区的响应码。单独识别出来，
- * 好让上层给出"该走 binance.vision 镜像"的明确提示，而不是笼统报错。
+ * 451 表示法律/地区限制；403 也可能是 WAF 或访问策略，不能当作地理封锁。
  */
 export function isGeoBlocked(err: unknown): boolean {
-  return err instanceof UpstreamError && (err.status === 451 || err.status === 403);
+  return err instanceof UpstreamError && err.status === 451;
 }
 
+const INFLIGHT_KEY = Symbol.for('crypto-radar.http.inflight');
+const pendingGlobal = globalThis as unknown as Record<symbol, Map<string, Promise<unknown>> | undefined>;
+pendingGlobal[INFLIGHT_KEY] ??= new Map();
+const pending = pendingGlobal[INFLIGHT_KEY];
+
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
+  if (opts.dedupe === false) return requestJson<T>(url, opts);
+  // Routes and background workers often request the same registry/candles together.
+  // Coalesce only requests with identical options, including authorization headers.
+  const key = JSON.stringify([url, opts]);
+  const existing = pending.get(key);
+  if (existing) return existing as Promise<T>;
+  const request = requestJson<T>(url, opts);
+  pending.set(key, request);
+  try {
+    return await request;
+  } finally {
+    pending.delete(key);
+  }
+}
+
+async function requestJson<T>(url: string, opts: FetchOptions): Promise<T> {
   const { ttlMs = 0, timeoutMs = 10_000, retries = 2, headers } = opts;
 
   if (ttlMs > 0) {
@@ -78,7 +100,10 @@ export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promis
       if (ttlMs > 0) cache.set(url, { value, expiresAt: Date.now() + ttlMs });
       return value;
     } catch (err) {
-      lastErr = err;
+      lastErr = err instanceof UpstreamError ? err : new UpstreamError(
+        controller.signal.aborted ? `请求 ${hostOf(url)} 超时（${timeoutMs / 1000} 秒）` : `无法连接 ${hostOf(url)}`,
+        undefined, url,
+      );
       // 地理封锁和 4xx 重试没有意义，立即抛出交给上层降级
       if (err instanceof UpstreamError && err.status && err.status < 500 && err.status !== 429) {
         throw err;

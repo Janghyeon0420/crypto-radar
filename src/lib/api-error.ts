@@ -1,24 +1,16 @@
 import { NextResponse } from 'next/server';
 import { UpstreamError, isGeoBlocked } from './datasources/http';
 
-/**
- * 统一的上游错误响应。
- *
- * 特别处理地理封锁：如果哪天代码被改回 api.binance.com，或者用户换了网络环境，
- * 451 会被翻译成一句能直接照做的提示，而不是一个让人摸不着头脑的 500。
- */
+/** Translate upstream failures without guessing their exchange or location. */
 export function apiError(err: unknown, source: string) {
-  if (isGeoBlocked(err)) {
-    return NextResponse.json(
-      {
-        error: `${source} 返回地理封锁（HTTP ${(err as UpstreamError).status}）。` +
-          '本项目应使用 data-api.binance.vision 公开镜像，该域名不受地区限制；' +
-          '若该提示出现，说明请求打到了受限的 api.binance.com。',
-        code: 'GEO_BLOCKED',
-      },
-      { status: 502 },
-    );
-  }
+  const status = err instanceof UpstreamError ? err.status : undefined;
   const message = err instanceof Error ? err.message : String(err);
-  return NextResponse.json({ error: `${source} 请求失败：${message}` }, { status: 502 });
+  const code = isGeoBlocked(err) ? 'GEO_BLOCKED'
+    : status === 403 ? 'UPSTREAM_FORBIDDEN'
+    : status === 429 ? 'UPSTREAM_RATE_LIMITED'
+    : 'UPSTREAM_UNAVAILABLE';
+  const hint = status === 451 ? ' 当前出口受到地区访问限制，请检查服务端网络或代理。'
+    : status === 403 ? ' 上游拒绝访问，请检查访问策略或服务端网络。'
+    : status === 429 ? ' 上游请求过于频繁，请稍后重试。' : '';
+  return NextResponse.json({ error: `${source} 请求失败：${message}${hint}`, code }, { status: 502 });
 }

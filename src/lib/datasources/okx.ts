@@ -12,7 +12,7 @@
  * 上层拿到的都是 Candle / Ticker，不需要知道数据来自哪家。
  */
 
-import { fetchJson } from './http';
+import { fetchJson, UpstreamError } from './http';
 import type { Candle, DerivativesSnapshot, Interval, Ticker } from './types';
 
 const OKX_REST = 'https://www.okx.com';
@@ -80,8 +80,8 @@ const BAR: Record<Interval, string> = {
   '15m': '15m',
   '1h': '1H',
   '4h': '4H',
-  '1d': '1D',
-  '1w': '1W',
+  '1d': '1Dutc',
+  '1w': '1Wutc',
 };
 
 type OkxCandleRow = [
@@ -108,16 +108,24 @@ export async function fetchOkxCandles(
   symbol: string,
   interval: Interval,
   limit = 300,
+  window?: { startTime: number; endTime: number },
+  options: { fresh?: boolean } = {},
 ): Promise<Candle[]> {
   const instId = toOkxSpotId(symbol);
-  if (!instId) return [];
+  if (!instId) throw new UpstreamError('OKX 不支持该交易对格式');
 
-  const capped = Math.min(limit, 300);
+  const capped = Math.min(limit, window ? 100 : 300);
+  // OKX cursors are exclusive. Pin both boundaries to fetch this historical window.
+  const endpoint = window ? 'history-candles' : 'candles';
+  const url = `${OKX_REST}/api/v5/market/${endpoint}?instId=${instId}&bar=${BAR[interval]}&limit=${capped}` +
+    (window ? `&after=${window.endTime + 1}&before=${window.startTime - 1}` : '');
   const res = await fetchJson<OkxResponse<OkxCandleRow>>(
-    `${OKX_REST}/api/v5/market/candles?instId=${instId}&bar=${BAR[interval]}&limit=${capped}`,
-    { ttlMs: 5_000, timeoutMs: 12_000 },
+    url,
+    { ttlMs: options.fresh ? 0 : 5_000, dedupe: options.fresh ? false : true, timeoutMs: 6_000, retries: 0 },
   );
-  if (res.code !== '0' || !Array.isArray(res.data)) return [];
+  if (res.code !== '0' || !Array.isArray(res.data)) {
+    throw new UpstreamError(`OKX 接口返回错误（${res.code}）`);
+  }
 
   return res.data
     .map((k) => ({
@@ -153,9 +161,11 @@ export async function fetchOkxTickers(symbols: string[]): Promise<Ticker[]> {
 
   const res = await fetchJson<OkxResponse<OkxTickerRow>>(
     `${OKX_REST}/api/v5/market/tickers?instType=SPOT`,
-    { ttlMs: 5_000, timeoutMs: 12_000 },
+    { ttlMs: 5_000, timeoutMs: 6_000, retries: 0 },
   );
-  if (res.code !== '0' || !Array.isArray(res.data)) return [];
+  if (res.code !== '0' || !Array.isArray(res.data)) {
+    throw new UpstreamError(`OKX 接口返回错误（${res.code}）`);
+  }
 
   const out: Ticker[] = [];
   for (const t of res.data) {
@@ -179,9 +189,11 @@ export async function fetchOkxSpotSymbols(): Promise<string[]> {
   const res = await fetchJson<OkxResponse<{ instId: string; state: string }>>(
     `${OKX_REST}/api/v5/public/instruments?instType=SPOT`,
     // 交易对列表变动很慢，缓存 1 小时
-    { ttlMs: 3600_000, timeoutMs: 15_000 },
+    { ttlMs: 3600_000, timeoutMs: 6_000, retries: 0 },
   );
-  if (res.code !== '0' || !Array.isArray(res.data)) return [];
+  if (res.code !== '0' || !Array.isArray(res.data)) {
+    throw new UpstreamError(`OKX 接口返回错误（${res.code}）`);
+  }
 
   return res.data
     .filter((i) => i.state === 'live' && /-(USDT|USDC)$/.test(i.instId))

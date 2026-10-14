@@ -12,6 +12,6 @@ export async function GET() {
   try {
     return NextResponse.json({ symbols: await fetchSymbols() });
   } catch (err) {
-    return apiError(err, 'binance.vision');
+    return apiError(err, '行情数据源');
   }
 }

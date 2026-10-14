@@ -86,6 +86,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ rows, benchmark: btcReturns ? 'BTCUSDT' : null });
   } catch (err) {
-    return apiError(err, 'binance.vision');
+    return apiError(err, '行情数据源');
   }
 }

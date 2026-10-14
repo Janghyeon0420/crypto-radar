@@ -14,7 +14,7 @@
  * 因此本项目定位为纯只读看板，不接账户、不下单。
  */
 
-import { fetchJson } from './http';
+import { fetchJson, UpstreamError } from './http';
 import type { Candle, Interval, OrderBook, Ticker } from './types';
 
 export const BINANCE_REST = 'https://data-api.binance.vision';
@@ -39,10 +39,14 @@ export async function fetchCandles(
   symbol: string,
   interval: Interval,
   limit = 500,
+  window?: { startTime: number; endTime: number },
+  options: { fresh?: boolean } = {},
 ): Promise<Candle[]> {
-  const url = `${BINANCE_REST}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  const url = `${BINANCE_REST}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}` +
+    (window ? `&startTime=${window.startTime}&endTime=${window.endTime}` : '');
   // K 线只在收盘时变化，1m 线缓存 5 秒足够，长周期可以更久；这里取保守值
-  const raw = await fetchJson<RawKline[]>(url, { ttlMs: 5_000 });
+  const raw = await fetchJson<RawKline[]>(url, { ttlMs: options.fresh ? 0 : 5_000, dedupe: options.fresh ? false : true, timeoutMs: 6_000, retries: 0 });
+  if (!Array.isArray(raw)) throw new UpstreamError('币安 K 线响应格式错误', undefined, url);
   return raw.map((k) => ({
     time: k[0],
     open: +k[1],
@@ -70,7 +74,7 @@ export async function fetchTickers(symbols?: string[]): Promise<Ticker[]> {
   if (symbols?.length) {
     url += `?symbols=${encodeURIComponent(JSON.stringify(symbols))}`;
   }
-  const raw = await fetchJson<RawTicker[] | RawTicker>(url, { ttlMs: 3_000 });
+  const raw = await fetchJson<RawTicker[] | RawTicker>(url, { ttlMs: 3_000, timeoutMs: 6_000, retries: 0 });
   const list = Array.isArray(raw) ? raw : [raw];
   return list.map(toTicker);
 }
@@ -109,7 +113,7 @@ export async function fetchUsdtSymbols(): Promise<SymbolInfo[]> {
   const url = `${BINANCE_REST}/api/v3/exchangeInfo`;
   const raw = await fetchJson<{
     symbols: { symbol: string; baseAsset: string; quoteAsset: string; status: string }[];
-  }>(url, { ttlMs: 3_600_000, timeoutMs: 25_000 });
+  }>(url, { ttlMs: 3_600_000, timeoutMs: 6_000, retries: 0 });
 
   return raw.symbols
     .filter((s) => s.status === 'TRADING' && s.quoteAsset === 'USDT')
