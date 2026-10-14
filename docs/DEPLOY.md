@@ -126,6 +126,17 @@ npm run netcheck:proxy
 
 ---
 
+## 驾驶舱与预测复盘的运维要点
+
+- **驾驶舱（`/`）只允许本机访问**：接口会拒绝非回环的 Host 与跨站请求。常驻服务会跟着笔记本连咖啡馆、酒店的 Wi-Fi，
+  而 `data/steady.json` 里是你手填的持仓与计划，所以这是有意为之。确实要在手机上看，
+  在 `.env.local` 里写 `STEADY_ALLOW_LAN=1` 后重启服务；设了之后同一局域网的人也能读到你的持仓，不可信的网络里别开。
+- **预测复盘**：服务运行期间每分钟补做一次到期预测的复盘。日志里的 `[forecast] 待复盘：…` 表示缺行情、下一轮重试，不是故障。
+  调试时可用 `FORECAST_REVIEW_ENABLED=false` 关掉；存档在 `data/forecasts/`（`FORECAST_DATA_DIR` 可改），随每日快照一起备份。
+- 这些变量写进 `.env.local` 即可（Next 启动时读取），**不需要**进 plist；改完按下一节的 `kickstart` 重启。
+
+---
+
 ## 更新代码之后
 
 ```bash

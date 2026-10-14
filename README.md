@@ -55,6 +55,7 @@
 - **预测自动复盘** — 每条预测及输入快照保存在 `data/forecasts/`，相同锚点去重、原始预测不可覆盖。
   服务运行期间每分钟检查到期记录，按原交易所和时间窗口补齐实际 K 线；查看方向命中、收盘 MAPE、
   情景覆盖和持平价格基线。未到期或缺行情不计错误；初始启发式参数尚待真实样本检验。
+  复盘任务可用 `FORECAST_REVIEW_ENABLED=false` 关闭（见 `.env.example`）。
 - **基本面与情绪** — 永续合约资金费率、未平仓量、恐惧贪婪指数
 - **资讯 AI 汇总** — Cointelegraph / Decrypt / CoinDesk / 币安公告，按币种过滤，
   再由模型压成一段简报：整体鹰鸽倾向与分数、鹰鸽两侧的力量对比（按影响量级加权），
@@ -145,11 +146,11 @@ cp .env.example .env.local
 | **DeepSeek** | ✅ 无需代理 | 约 50s（v4-flash）/ 95s（v4-pro） | `DEEPSEEK_API_KEY` |
 | **Anthropic 官方** | ❌ 需代理 | — | `ANTHROPIC_API_KEY` |
 
-⚠️ 中转站与 DeepSeek 都需要**直连**，而 OKX 衍生品数据需要**走代理**。
-若两者同时使用，必须用 `NO_PROXY` 排除：
+⚠️ 币安镜像、中转站与 DeepSeek 都应该**直连**，而 OKX 衍生品数据需要**走代理**。
+手动启动并设了 `HTTPS_PROXY` 时，必须用 `NO_PROXY` 把直连的域名排除：
 
 ```bash
-HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=localhost,127.0.0.1,你的中转站域名 npm run dev
+HTTPS_PROXY=http://127.0.0.1:7890 NO_PROXY=localhost,127.0.0.1,data-api.binance.vision,你的中转站域名 npm run dev
 ```
 
 用 `node scripts/setup-launchd.mjs --install` 装常驻服务时，币安镜像、`.env.local` 里 LLM 接口的域名
@@ -227,7 +228,7 @@ npm test
 群机器人加签（写错是静默失败——HTTP 200 但消息不出现）、FOMC 日历解析，
 以及稳健驾驶舱的风险计算（回撤、beta；由底线反推配置的属性测试扫过全部底线取值，
 确认配置不会悄悄超预算）、定投日程、本机访问保护与存储（原子写、损坏不覆盖）、
-行情源的请求合并 / 回退 / 校验 / 失败归因、预测存档与到期复盘。
+行情源的请求合并 / 回退 / 校验 / 失败归因、AI 研判的容错与错误翻译、预测存档与到期复盘。
 
 依赖真实网络的那部分默认跳过，需要时单独跑：
 
@@ -243,7 +244,9 @@ lightweight-charts (TradingView) · Zustand · Zod · Anthropic SDK
 ## 文档
 
 - [数据源与网络可达性评估](docs/DATA-SOURCES.md) —— 含完整实测数据，**建议先读**
+- [数据源框架](docs/DATA-FRAMEWORK.md) —— 每类判断由哪个源负责、冲突时以谁为准、降级行为
 - [架构说明](docs/ARCHITECTURE.md) —— 分层、目录、关键设计决策
+- [常驻部署](docs/DEPLOY.md) —— launchd / pm2、更新代码后如何生效、怎么确认它真的在工作
 - [后续规划](docs/ROADMAP.md)
 - [产品形态逆向、竞品对比与稳健迭代](docs/PRODUCT-STRATEGY.md) —— 为什么首页是稳健驾驶舱（证据分级标注）
 - [技术预测知识库](docs/TECHNICAL-KNOWLEDGE.md) —— 预测引擎用到的规则及其来源与局限

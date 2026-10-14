@@ -189,13 +189,19 @@ Node 的 `NODE_USE_ENV_PROXY`（`npm run dev` 已内置）支持 `NO_PROXY` 做�
 
 ```bash
 HTTPS_PROXY=http://127.0.0.1:7890 \
-NO_PROXY=localhost,127.0.0.1,你的中转站域名 \
+NO_PROXY=localhost,127.0.0.1,data-api.binance.vision,你的中转站域名 \
 npm run dev
 ```
 
-这样 OKX 走代理、中转站走直连，两者同时可用。
+这样 OKX 走代理、币安镜像与中转站走直连，三者同时可用。
 
 **DeepSeek 同理**，它直连可达且更快，也应加进 `NO_PROXY`。
+
+**币安镜像也要加，而且不加的后果最隐蔽。** 2026-10-14 实测：`data-api.binance.vision` 直连稳定在 1 秒内，
+经本地代理则延迟在 0.3 秒到 10 秒之间抖动。适配器的超时只有 6 秒且不重试（见 ARCHITECTURE 决策 15），
+抖过上限就是整次请求失败——AI 研判第一步（拉行情）因此报「请求 data-api.binance.vision 超时」，
+而页面上其他数据源都正常，很容易误判成别的问题。用 `node scripts/setup-launchd.mjs --install` 装常驻服务时，
+币安镜像与 `.env.local` 里的 LLM 域名会自动写进 `NO_PROXY`（见 DEPLOY.md）。
 
 > 代理端口会随客户端版本或重装而变。若某天全部数据源突然都不通，
 > 先用 `lsof -nP -iTCP -sTCP:LISTEN | grep 127.0.0.1` 确认当前端口，
