@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { fetchCandles, fetchTickers } from '@/lib/datasources/market';
+import { describeSource, fetchCandles, fetchTickers } from '@/lib/datasources/market';
 import { fetchDerivatives } from '@/lib/datasources/okx';
 import { fetchFearGreed } from '@/lib/datasources/sentiment';
 import { fetchNews, filterNewsByAsset } from '@/lib/datasources/news';
@@ -8,11 +8,11 @@ import { fetchMacroSnapshot } from '@/lib/datasources/macro';
 import { fetchOnchainSnapshot } from '@/lib/datasources/onchain';
 import { buildTechnicalSnapshot } from '@/lib/indicators/summary';
 import {
-  ProviderNotConfiguredError,
   describeProvider,
   isAnalysisAvailable,
   runAnalysis,
 } from '@/lib/analysis/runner';
+import { explainMarketError, explainModelError, withRetry } from '@/lib/analysis/errors';
 import { appendRecord, readRecords } from '@/lib/history/store';
 import { decideCache, policyFromEnv } from '@/lib/history/cache';
 import { calibrateConfidence } from '@/lib/history/calibrate';
@@ -40,8 +40,9 @@ export const maxDuration = 300;
  *
  * 每行一个 JSON 对象：
  *   {"stage":"quote"|"klines"|"context"|"model"}   进度
+ *   {"stage":"retry", "attempt":2, "reason":"..."}  模型输出不合格，自动重试中
  *   {"stage":"done", ...研判结果}                    成功
- *   {"stage":"error", "error":"...", "code":"..."}   失败
+ *   {"stage":"error", "error":"...", "code":"...", "retryable":bool}   失败
  */
 export async function POST(req: Request) {
   if (!isAnalysisAvailable()) {
@@ -70,20 +71,42 @@ export async function POST(req: Request) {
   }
 
   const encoder = new TextEncoder();
+  /**
+   * 客户端中途走掉（刷新页面、切走网络）后流被取消，此后 enqueue 会抛 TypeError。
+   * 让它冒上去，取数阶段断线会在下一次 send 处中止整个流程，已拉好的数据白费；
+   * 模型阶段断线则在收尾处抛出没人接的异常。
+   * 所以断线后 send 变成空操作，流程照常跑完：结果照样写进历史，
+   * 用户再点一次研判会直接命中缓存，不会为同一次推理付两次钱。
+   */
+  let closed = false;
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+        } catch {
+          closed = true;
+        }
       };
 
       try {
         await runAnalysisFlow(symbol, force, send);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        send({ stage: 'error', error: `研判失败：${message}` });
+        const e = explainModelError(err);
+        send({ stage: 'error', error: e.message, code: e.code, retryable: e.retryable });
       } finally {
-        controller.close();
+        if (!closed) {
+          try {
+            controller.close();
+          } catch {
+            // 已被客户端取消，无需再关
+          }
+        }
       }
+    },
+    cancel() {
+      closed = true;
     },
   });
 
@@ -109,13 +132,16 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
 
   let tickers;
   try {
-    tickers = await fetchTickers([symbol]);
+    tickers = await withRetry(async () => {
+      const t = await fetchTickers([symbol]);
+      // fetchTickers 为了「一家挂了不拖累另一家」会吞掉单个交易所的失败，只留下空数组。
+      // 这里把空结果还原成失败：既能重试，也不会把网络超时误报成「行情不可用」
+      if (!t[0]) throw new Error('交易所没有返回该交易对的行情');
+      return t;
+    });
   } catch (err) {
-    send({ stage: 'error', error: `binance.vision 请求失败：${describe(err)}` });
-    return;
-  }
-  if (!tickers[0]) {
-    send({ stage: 'error', error: `${symbol} 行情不可用` });
+    const e = explainMarketError(err, await sourceLabel(symbol), symbol);
+    send({ stage: 'error', error: e.message, code: e.code, retryable: e.retryable });
     return;
   }
   const currentPrice = tickers[0].last;
@@ -149,9 +175,13 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
 
   let candleSets;
   try {
-    candleSets = await Promise.all(ANALYSIS_INTERVALS.map((i) => fetchCandles(symbol, i, 300)));
+    // 三个周期一个都不能少（多周期共振是研判的核心），所以逐个重试而不是容忍缺失
+    candleSets = await Promise.all(
+      ANALYSIS_INTERVALS.map((i) => withRetry(() => fetchCandles(symbol, i, 300))),
+    );
   } catch (err) {
-    send({ stage: 'error', error: `binance.vision 请求失败：${describe(err)}` });
+    const e = explainMarketError(err, await sourceLabel(symbol), symbol);
+    send({ stage: 'error', error: e.message, code: e.code, retryable: e.retryable });
     return;
   }
 
@@ -180,18 +210,26 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
   send({ stage: 'model', ...describeProvider(), typicalMs: typicalDuration(allRecords) });
 
   try {
-    const analysis = await runAnalysis({
-      symbol,
-      baseAsset,
-      ticker: tickers[0],
-      technicals,
-      derivatives: derivatives.status === 'fulfilled' ? derivatives.value : null,
-      sentiment: sentiment.status === 'fulfilled' ? sentiment.value : null,
-      news:
-        news.status === 'fulfilled' ? filterNewsByAsset(news.value, baseAsset).slice(0, 12) : [],
-      macro: macro.status === 'fulfilled' ? macro.value : null,
-      onchain: onchain.status === 'fulfilled' ? onchain.value : null,
-    });
+    const analysis = await runAnalysis(
+      {
+        symbol,
+        baseAsset,
+        ticker: tickers[0],
+        technicals,
+        derivatives: derivatives.status === 'fulfilled' ? derivatives.value : null,
+        sentiment: sentiment.status === 'fulfilled' ? sentiment.value : null,
+        news:
+          news.status === 'fulfilled' ? filterNewsByAsset(news.value, baseAsset).slice(0, 12) : [],
+        macro: macro.status === 'fulfilled' ? macro.value : null,
+        onchain: onchain.status === 'fulfilled' ? onchain.value : null,
+      },
+      {
+        // 重试等于再等一整轮模型推理。不说的话，界面上看起来就是卡在「等待模型」，
+        // 用户在第 60 秒会以为它挂了，实际是第一次输出不合格、正在跑第二次
+        onRetry: ({ attempt, reason }) =>
+          send({ stage: 'retry', attempt, reason: reason.split('\n')[0].slice(0, 100) }),
+      },
+    );
 
     const record = {
       id: randomUUID(),
@@ -220,15 +258,20 @@ async function runAnalysisFlow(symbol: string, force: boolean, send: Send): Prom
       calibration: calibrateConfidence(allRecords, analysis.confidence),
     });
   } catch (err) {
-    if (err instanceof ProviderNotConfiguredError) {
-      send({ stage: 'error', error: err.message, code: 'NO_PROVIDER' });
-      return;
-    }
-    send({ stage: 'error', error: `研判失败：${describe(err)}` });
+    console.warn(`[analysis] ${symbol} 研判失败：${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`);
+    const e = explainModelError(err);
+    send({ stage: 'error', error: e.message, code: e.code, retryable: e.retryable });
   }
 }
 
-const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** 报错里用的数据源名称。失败路径上才调用，查不出来就退回泛称，不能让它再抛一次错 */
+async function sourceLabel(symbol: string): Promise<string> {
+  try {
+    return (await describeSource(symbol)) === 'okx' ? 'OKX ' : '币安镜像（binance.vision）';
+  } catch {
+    return '';
+  }
+}
 
 /** 最近几次真实研判的中位耗时。没有历史时返回 null，不编一个数字 */
 function typicalDuration(records: { durationMs?: number }[]): number | null {

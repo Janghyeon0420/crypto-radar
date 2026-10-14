@@ -15,6 +15,8 @@ export class JsonExtractionError extends Error {
   constructor(
     message: string,
     readonly raw: string,
+    /** truncated = 被长度上限截断；其余为格式或内容问题。决定重试时该怎么调整 */
+    readonly kind: 'truncated' | 'invalid' = 'invalid',
   ) {
     super(message);
     this.name = 'JsonExtractionError';

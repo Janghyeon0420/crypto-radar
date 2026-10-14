@@ -63,7 +63,7 @@ export async function evaluateRecord(record: AnalysisRecord): Promise<Evaluation
 
   const invalidation = record.analysis.levels.invalidation;
   // 失效价在现价之上还是之下，决定了"触及"是向上突破还是向下跌破
-  const invalidationHit = Number.isFinite(invalidation)
+  const invalidationHit = typeof invalidation === 'number' && Number.isFinite(invalidation)
     ? invalidation > record.priceAtAnalysis
       ? highDuring >= invalidation
       : lowDuring <= invalidation

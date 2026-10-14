@@ -29,6 +29,12 @@ export interface GenerateRequest<T> {
   constraints?: string[];
   maxTokens?: number;
   /**
+   * 因输出不合格而自动重试时的通知。
+   * 一次重试等于再等一整轮模型推理（实测 30~150 秒），
+   * 调用方若不告诉用户，界面上看起来就是「卡在模型那一步」。
+   */
+  onRetry?: (info: { attempt: number; reason: string }) => void;
+  /**
    * 是否需要模型做深度推理。
    * 研判要权衡多周期共振与信号冲突，需要；
    * 资讯归类是"读完一堆标题给个倾向"，不需要——开了只是更慢更贵。

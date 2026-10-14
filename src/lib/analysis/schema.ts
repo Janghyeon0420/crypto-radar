@@ -41,9 +41,17 @@ export const AnalysisSchema = z.object({
   levels: z.object({
     supports: z.array(z.number()).describe('关键支撑价位，从近到远'),
     resistances: z.array(z.number()).describe('关键阻力价位，从近到远'),
+    // 可缺省：实测震荡结论里模型偶尔不给单一失效价（区间两侧都算失效），
+    // 日志里「levels.invalidation 缺失」占了输出校验失败的大头。
+    // 为一个次要字段把 30~150 秒的付费响应整个丢掉、再花同样时间重试，不划算——
+    // 缺了就如实显示「—」，评估与上图逻辑本来就按「非有限数」跳过它。
     invalidation: z
       .number()
-      .describe('该判断的失效价位——跌破/突破此价则结论不再成立'),
+      .nullish()
+      .describe(
+        '该判断的失效价位——跌破/突破此价则结论不再成立。必须是单个数字：' +
+          '看涨取跌破价，看跌取突破价，震荡取现价上下最先破位的那一侧边界',
+      ),
   }),
 
   /** 情景推演，比单点预测更诚实 */
@@ -79,6 +87,8 @@ export const ANALYSIS_CONSTRAINTS = [
   'factors 至少 3 条，每条的 note 必须引用输入数据中的具体数值',
   'scenarios 有 2-3 个，probability 之和应接近 100',
   'risks 至少 2 条',
+  'levels.invalidation 必须是单个数字，不要省略，不要写 null，也不要写成区间；' +
+    '震荡时取现价上下最先破位的那一侧边界',
   'dataGaps 在无缺失时返回空数组 []，不要省略该字段',
   'weight 和 probability 用数字，不要写成字符串',
 ];

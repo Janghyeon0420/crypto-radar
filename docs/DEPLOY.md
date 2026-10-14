@@ -60,6 +60,16 @@ HTTPS_PROXY=http://127.0.0.1:7890 node scripts/setup-launchd.mjs --install
 脚本会把当前 shell 里的代理变量固化进 plist，并在你没带时给出警告。
 没有代理的话 OKX 衍生品数据会拿不到（币安镜像与美联储数据不需要代理）。
 
+**直连的域名会自动写进 `NO_PROXY`**：币安镜像（`data-api.binance.vision`、`data-stream.binance.vision`）
+以及 `.env.local` 里 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` / `DEEPSEEK_BASE_URL` 指向的 LLM 接口域名。
+`NODE_USE_ENV_PROXY=1` 会让**所有**出站请求走代理，而这几个直连更快更稳——
+币安镜像走本地代理时延迟抖动很大，抖到超时上限，AI 研判第一步（拉行情）就会报
+「请求 data-api.binance.vision 超时」。只有 OKX 真正需要代理。
+
+> 已经装过的，**改了 `.env.local` 里的接口域名、或更换了代理端口后**，需要重新跑一次
+> `HTTPS_PROXY=... node scripts/setup-launchd.mjs --install`（在 git worktree 里跑也行，
+> 脚本会自动把服务指向主工作区，而不是那个临时目录）。不带 `--install` 直接运行脚本只会打印将要写入的内容与直连域名，不改动任何东西，可先看一眼。
+
 **API Key 不进 plist**。Next 会自行读取 `.env.local`，密钥留在那里——
 plist 是纯文本、会被 Spotlight 索引，不该放凭据。
 

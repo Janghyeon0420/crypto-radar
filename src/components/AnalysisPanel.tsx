@@ -21,6 +21,30 @@ const DIMENSION_LABEL: Record<string, string> = {
   macro: '宏观',
 };
 
+interface Progress {
+  stage: string;
+  typicalMs: number | null;
+  model?: string;
+  /** stage === 'retry' 时，上一次输出被判不合格的原因 */
+  retryReason?: string;
+}
+
+/**
+ * 浏览器侧 fetch 失败时的提示。
+ * 各浏览器对「连接被掐断」的措辞都不同（Failed to fetch / Load failed / network error /
+ * terminated），原样展示给用户等于什么都没说。
+ */
+function explainClientError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/failed to fetch|load failed|network ?error|terminated|aborted|socket/i.test(msg)) {
+    return (
+      '与看板服务的连接中断了（服务可能刚重启，或电脑休眠过）。' +
+      '如果模型已经跑完，结果已存入历史——再点一次会直接复用，不会重复计费。'
+    );
+  }
+  return msg;
+}
+
 /**
  * LLM 综合研判。
  *
@@ -43,10 +67,10 @@ export function AnalysisPanel({
   const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [loading, setLoading] = useState(false);
   /** 服务端推来的真实阶段。null 表示未在进行中 */
-  const [progress, setProgress] = useState<{ stage: string; typicalMs: number | null; model?: string } | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
   /** 已等待秒数。与阶段一起显示，让「还在动」这件事本身可见 */
   const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; retryable: boolean } | null>(null);
 
   useEffect(() => {
     if (!loading) return;
@@ -81,6 +105,44 @@ export function AnalysisPanel({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      /** 是否收到了终态事件（done / error）。没收到就读完了流，说明连接被截断 */
+      let settled = false;
+
+      const handle = (line: string) => {
+        if (!line.trim()) return;
+        let evt;
+        try {
+          evt = JSON.parse(line);
+        } catch {
+          // 单行损坏不该让整次研判作废——后面的终态事件还在
+          console.warn('[研判] 忽略无法解析的进度行：', line.slice(0, 120));
+          return;
+        }
+
+        if (evt.stage === 'error') {
+          settled = true;
+          setError({ message: evt.error, retryable: evt.retryable !== false });
+          return;
+        }
+        if (evt.stage !== 'done') {
+          // retry 事件不带 typicalMs / model，沿用之前的，否则提示里「上次约 N 秒」会凭空消失
+          setProgress((prev) => ({
+            stage: evt.stage,
+            typicalMs: evt.typicalMs ?? prev?.typicalMs ?? null,
+            model: evt.model ?? prev?.model,
+            retryReason: evt.stage === 'retry' ? evt.reason : undefined,
+          }));
+          return;
+        }
+
+        settled = true;
+        setAnalysis(evt.analysis);
+        setGeneratedAt(evt.generatedAt);
+        setCache({ cached: Boolean(evt.cached), reason: evt.cacheReason });
+        setCalibration(evt.calibration ?? null);
+        // 命中缓存时没有新记录产生，不必刷新准确率面板
+        if (!evt.cached) onAnalyzed?.();
+      };
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -89,27 +151,22 @@ export function AnalysisPanel({
 
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
+        lines.forEach(handle);
+      }
+      handle(buffer);
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const evt = JSON.parse(line);
-
-          if (evt.stage === 'error') throw new Error(evt.error);
-          if (evt.stage !== 'done') {
-            setProgress({ stage: evt.stage, typicalMs: evt.typicalMs ?? null, model: evt.model });
-            continue;
-          }
-
-          setAnalysis(evt.analysis);
-          setGeneratedAt(evt.generatedAt);
-          setCache({ cached: Boolean(evt.cached), reason: evt.cacheReason });
-          setCalibration(evt.calibration ?? null);
-          // 命中缓存时没有新记录产生，不必刷新准确率面板
-          if (!evt.cached) onAnalyzed?.();
-        }
+      // 以前流提前结束时这里什么都不会发生：按钮恢复、没有结果、没有报错，
+      // 看起来像「点了没反应」。服务重启、电脑休眠唤醒、代理断线都会走到这里
+      if (!settled) {
+        setError({
+          message:
+            '与看板服务的连接在研判完成前中断了（服务可能刚重启，或电脑休眠过）。' +
+            '如果模型已经跑完，结果已存入历史——再点一次会直接复用，不会重复计费。',
+          retryable: true,
+        });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError({ message: explainClientError(err), retryable: true });
     } finally {
       setLoading(false);
       setProgress(null);
@@ -129,9 +186,17 @@ export function AnalysisPanel({
       </div>
 
       {error && (
-        <p className="rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-400 ring-1 ring-rose-500/20">
-          {error}
-        </p>
+        <div className="flex items-start justify-between gap-2 rounded-lg bg-rose-500/10 px-3 py-2 ring-1 ring-rose-500/20">
+          <p className="text-xs leading-relaxed text-rose-400">{error.message}</p>
+          {error.retryable && !loading && (
+            <button
+              onClick={() => run(false)}
+              className="shrink-0 text-xs text-rose-300 underline-offset-2 hover:underline"
+            >
+              重试
+            </button>
+          )}
+        </div>
       )}
 
       {loading && progress && <ProgressNote progress={progress} elapsed={elapsed} />}
@@ -269,6 +334,7 @@ const STAGE_LABEL: Record<string, string> = {
   klines: '拉取 1h / 4h / 1d 三个周期的 K 线并计算指标',
   context: '拉取衍生品、市场情绪、资讯与宏观',
   model: '已提交模型，等待返回',
+  retry: '模型第一次的输出不合格，已反馈问题并重新生成',
 };
 
 const STAGE_ORDER = ['quote', 'klines', 'context', 'model'];
@@ -286,10 +352,11 @@ function ProgressNote({
   progress,
   elapsed,
 }: {
-  progress: { stage: string; typicalMs: number | null; model?: string };
+  progress: Progress;
   elapsed: number;
 }) {
-  const idx = STAGE_ORDER.indexOf(progress.stage);
+  // 重试发生在模型阶段内，进度点停在最后一格
+  const idx = progress.stage === 'retry' ? STAGE_ORDER.length - 1 : STAGE_ORDER.indexOf(progress.stage);
   const typical = progress.typicalMs ? Math.round(progress.typicalMs / 1000) : null;
 
   return (
@@ -313,11 +380,15 @@ function ProgressNote({
       </div>
 
       <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
-        {progress.stage === 'model'
-          ? typical
-            ? `模型推理占了绝大部分时间。最近几次约 ${typical} 秒。`
-            : '模型推理占了绝大部分时间，实测 23-95 秒不等。'
-          : '前三步都是取数与计算，通常几秒内完成。'}
+        {progress.stage === 'retry'
+          ? // 重试要再等一整轮推理，所以耗时大约翻倍——把这件事说出来，用户才不会以为卡死
+            `这是自动重试，会比平时多等一轮${typical ? `（约 ${typical} 秒）` : ''}。` +
+            (progress.retryReason ? `上次的问题：${progress.retryReason}` : '')
+          : progress.stage === 'model'
+            ? typical
+              ? `模型推理占了绝大部分时间。最近几次约 ${typical} 秒。`
+              : '模型推理占了绝大部分时间，实测 23-95 秒不等。'
+            : '前三步都是取数与计算，通常几秒内完成。'}
       </p>
     </div>
   );

@@ -6,8 +6,12 @@
 import { getProvider } from './providers';
 import { SYSTEM_PROMPT, buildUserPrompt, type AnalysisInput } from './prompt';
 import { AnalysisSchema, ANALYSIS_CONSTRAINTS, type Analysis } from './schema';
+import type { GenerateRequest } from './providers/types';
 
-export async function runAnalysis(input: AnalysisInput): Promise<Analysis> {
+export async function runAnalysis(
+  input: AnalysisInput,
+  hooks: { onRetry?: GenerateRequest<Analysis>['onRetry'] } = {},
+): Promise<Analysis> {
   const provider = getProvider();
   const started = Date.now();
 
@@ -16,6 +20,7 @@ export async function runAnalysis(input: AnalysisInput): Promise<Analysis> {
     user: buildUserPrompt(input),
     schema: AnalysisSchema,
     constraints: ANALYSIS_CONSTRAINTS,
+    onRetry: hooks.onRetry,
     // 研判要权衡多周期共振与信号冲突，属于需要推理的任务
     thinking: true,
   });

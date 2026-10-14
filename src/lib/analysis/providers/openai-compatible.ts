@@ -49,13 +49,15 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
 
       let lastError: unknown;
       let repairHint = '';
+      // JSON 结构较大，给足输出空间，否则会在中途被截断成非法 JSON。
+      // 重试时若确认上次是被截断的，会在下面翻倍
+      let maxTokens = req.maxTokens ?? 8000;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           const completion = await client.chat.completions.create({
             model: cfg.model,
-            // JSON 结构较大，给足输出空间，否则会在中途被截断成非法 JSON
-            max_tokens: req.maxTokens ?? 8000,
+            max_tokens: maxTokens,
             // 需要稳定输出，不要发散
             temperature: 0.3,
             ...(supportsJsonMode ? { response_format: { type: 'json_object' as const } } : {}),
@@ -70,8 +72,28 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
             ],
           });
 
-          const text = completion.choices[0]?.message?.content ?? '';
-          return parseAndValidate(text, req.schema);
+          const choice = completion.choices[0];
+          const text = choice?.message?.content ?? '';
+          const finishReason = choice?.finish_reason ?? null;
+
+          try {
+            return parseAndValidate(text, req.schema);
+          } catch (parseErr) {
+            if (!(parseErr instanceof JsonExtractionError)) throw parseErr;
+            // 「空内容」「解析不出 JSON」有两种完全不同的成因：被 max_tokens 截断，
+            // 或中转站/模型真的什么都没给。以前两者都报成同一句话，没法对症——
+            // 把 finish_reason 与用量带上，日志里一眼能分清
+            const used = completion.usage?.completion_tokens;
+            const detail = `finish_reason=${finishReason ?? '未知'}` + (used != null ? `，输出 ${used} tokens` : '');
+            if (finishReason === 'length') {
+              throw new JsonExtractionError(
+                `输出被 max_tokens=${maxTokens} 截断，JSON 不完整（${detail}）`,
+                text,
+                'truncated',
+              );
+            }
+            throw new JsonExtractionError(`${parseErr.message}（${detail}）`, text, parseErr.kind);
+          }
         } catch (err) {
           lastError = err;
 
@@ -80,8 +102,16 @@ export function createOpenAiCompatibleProvider(cfg: OpenAiCompatibleConfig): Llm
             break;
           }
           console.warn(`[${cfg.label}] 第 ${attempt} 次输出校验失败，重试中：${err.message}`);
-          // 把具体的字段错误反馈回去，比单纯重试有效得多
-          repairHint = `\n\n注意：你上一次的输出有以下问题，请修正后重新输出完整 JSON：\n${err.message}`;
+          req.onRetry?.({ attempt: attempt + 1, reason: err.message });
+
+          if (err.kind === 'truncated') {
+            // 截断是容量问题：原样重来只会在同一位置再被截一次
+            maxTokens = Math.min(maxTokens * 2, 32_000);
+            repairHint = '\n\n注意：你上一次的输出因过长被截断。请精简各字段的文字，保证完整输出并正确闭合的 JSON。';
+          } else {
+            // 把具体的字段错误反馈回去，比单纯重试有效得多
+            repairHint = `\n\n注意：你上一次的输出有以下问题，请修正后重新输出完整 JSON：\n${err.message}`;
+          }
         }
       }
 
